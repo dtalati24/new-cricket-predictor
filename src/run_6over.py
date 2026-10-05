@@ -61,6 +61,14 @@ def per_match(rows: pd.DataFrame, raw, sims) -> pd.DataFrame:
     return pd.DataFrame(out)
 
 
+def choose_model(results: dict) -> str:
+    """Best by calibrated (mae, crps); a model whose calibration failed ranks after all others."""
+    def key(n):
+        c = results[n]["calibrated"]
+        return (c is None, c["mae"] if c else 0.0, c["crps"] if c else 0.0)
+    return min(results, key=key)
+
+
 def _pit_histogram(matches: pd.DataFrame) -> list[int]:
     return np.histogram(matches.pit, bins=10, range=(0, 1))[0].tolist()
 
@@ -97,13 +105,20 @@ def dev() -> dict:
     for name in MODELS:
         m = fit_model(name, X.loc[tr], y[tr], dates[tr], cols)
         sims = simulate_matches(rows, ctx, m, table, DEV_N_SIMS)
-        cal = fit_calibration(sims, ys)
         results[name] = {"val_log_loss": log_loss(m.predict(X.loc[va]), y[va]),
-                         "raw": summary(sims, ys),
-                         "calibrated": summary([apply(cal, s) for s in sims], ys)}  # in-sample
+                         "raw": summary(sims, ys)}
+        try:
+            cal = fit_calibration(sims, ys)
+            results[name]["calibrated"] = summary([apply(cal, s) for s in sims], ys)  # in-sample
+        except ValueError as err:
+            results[name]["calibrated"] = None
+            results[name]["calibration_error"] = str(err)
         fitted[name] = (m, sims)
         print(name, results[name], flush=True)
-    best = min(results, key=lambda n: (results[n]["calibrated"]["mae"], results[n]["calibrated"]["crps"]))
+    if all(r["calibrated"] is None for r in results.values()):
+        raise SystemExit("no model could be calibrated: "
+                         + "; ".join(f"{n}: {r['calibration_error']}" for n, r in results.items()))
+    best = choose_model(results)
     m, sims = fitted[best]
 
     groups = importance_groups(ctx.skill.levels)

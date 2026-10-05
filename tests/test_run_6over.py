@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 
 from src.bet.backtest import decide, pnl
-from src.run_6over import per_match
+from src.run_6over import choose_model, per_match
 
 
 def test_per_match_columns_and_betting_rule():
@@ -22,3 +22,12 @@ def test_per_match_columns_and_betting_rule():
         assert (r.side if isinstance(r.side, str) else None) == side
         assert r.pnl == pnl(side, 50.5, r.actual)
     assert out.side.tolist()[:2] == ["over", "under"] and pd.isna(out.side[2])
+
+
+def test_choose_model_ranks_uncalibrated_last():
+    ok = lambda mae, crps: {"calibrated": {"mae": mae, "crps": crps}}  # noqa: E731
+    results = {"a": {"calibrated": None}, "b": ok(3.0, 5.0), "c": ok(3.0, 4.0), "d": ok(2.0, 9.0)}
+    assert choose_model(results) == "d"
+    del results["d"]
+    assert choose_model(results) == "c"
+    assert choose_model({"a": {"calibrated": None}, "b": ok(9.0, 9.0)}) == "b"
