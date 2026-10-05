@@ -63,7 +63,7 @@ def situation(b: pd.DataFrame) -> pd.DataFrame:
         "wickets": wkt.groupby(m).cumsum() - wkt,
         "runs": b.runs_total.astype(int).groupby(m).cumsum() - b.runs_total.astype(int),
         "batter_balls": faced.groupby([m, b.batter_id]).cumsum() - faced,
-        "free_hit": b.noball.notna().groupby(m).shift(1, fill_value=False).astype(int),
+        "free_hit": (b.outcome == "noball").groupby(m).shift(1, fill_value=False).astype(int),
     }, index=b.index).astype(np.float32)
 
 
