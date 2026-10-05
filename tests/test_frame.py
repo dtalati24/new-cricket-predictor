@@ -49,8 +49,8 @@ def test_over_rolls_after_six_legal_balls():
     assert s.ball_in_over.tolist() == [0, 1, 2, 3, 4, 5, 0, 1]
 
 
-def test_feature_columns_count_with_six_levels():
-    assert len(feature_columns(LEVELS)) == 6 * 11 + 11 + len(FORM) + len(SITUATION)
+def test_feature_columns_count_with_seven_levels():
+    assert len(feature_columns(LEVELS)) == 7 * 11 + 11 + len(FORM) + len(SITUATION)
 
 
 def test_hint_rows_sum_to_one():
@@ -73,7 +73,7 @@ def test_importance_groups_cover_every_feature_once_plus_all_skill():
     g = importance_groups(LEVELS)
     singles = [c for name, cols in g.items() if name != "all_skill" for c in cols]
     assert sorted(singles) == sorted(feature_columns(LEVELS))
-    assert len(g["all_skill"]) == 6 * 11 + 11
+    assert len(g["all_skill"]) == 7 * 11 + 11
 
 
 def test_situation_resets_at_each_match():

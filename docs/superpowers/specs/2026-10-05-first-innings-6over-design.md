@@ -74,6 +74,7 @@ lands near its parent; a group with thousands lands near its own record.
 ```
 league -> batter -> batter x bowler_type
 league -> bowler -> bowler x batting_hand
+league -> venue
 batter x venue   (parent: batter)
 bowler x venue   (parent: bowler)
 ```
@@ -98,15 +99,14 @@ only.
   the `k` fit (Build 1 pinned `k` at its bound on 8 of 10 levels this way).
   Recency lives in the form features.
 - **A `k` at its search bound raises an error.** It never returns silently.
-- **Density gate.** A level stays only if its median group has at least 30
-  balls, its `k` is off both bounds, and it improves held-out log loss.
+- **Density gate (report-only).** Each level's median group size, k and held-out log-loss gain versus its parent are measured and reported. By user decision (2026-10-05) no level is dropped on this basis; all levels are kept and judged later by feature importance. The first dev run measured: batter_x_bowlertype median 17 balls, gain +0.0038; bowler_x_battinghand gain −0.0002; batter_x_venue gain −0.0003; bowler_x_venue gain +0.00002.
 
 ## 5. ML model
 
 ### Inputs, one row per first-innings ball
 
 - **Skill:** the shrunk 11-class vectors for batter, batter x bowler type,
-  bowler, bowler x batting hand, batter x venue, bowler x venue.
+  bowler, bowler x batting hand, venue, batter x venue, bowler x venue.
 - **Combined hint:** batter rate x bowler rate / league rate, per class
   (renormalised). Saves the trees from learning the obvious interaction slowly.
 - **Situation:** over, legal ball in over, wickets down, runs so far, balls the
