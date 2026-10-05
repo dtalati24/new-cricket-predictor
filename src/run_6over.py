@@ -14,8 +14,8 @@ import sys
 import numpy as np
 import pandas as pd
 
-from src.bet.backtest import backtest
-from src.config import DEV_END, REPORTS_DIR, TRAIN_END, ensure_dirs
+from src.bet.backtest import backtest, decide, pnl
+from src.config import DEV_END, PARSED, REPORTS_DIR, TRAIN_END, ensure_dirs
 from src.features.form import batter_form, bowler_form
 from src.features.outcomes import load_balls, log_loss, outcome_table, venue_key
 from src.features.players import (
@@ -23,15 +23,17 @@ from src.features.players import (
 from src.market.baseline import comparison_bar, comparison_set
 from src.model.ballmodel import MODELS, fit as fit_model, permutation_importance
 from src.model.frame import build_frame, feature_columns, importance_groups
-from src.sim.calibrate import Calibration, apply, fit_calibration, summary
+from src.sim.calibrate import Calibration, apply, fit_calibration, pit, summary
 from src.sim.setup import Context, check_xi, simulate_matches
-from src.skill.shrink import fit as fit_skill, level_report
+from src.skill.shrink import LEVELS, fit as fit_skill, level_report
 
 SIX = "1_INNING_6_OVR_LINE"
 DEV_N_SIMS = 2_000      # model choice; median MC error ~0.3 runs per match, averaged over 435
 FINAL_N_SIMS = 10_000
 DEV_REPORT = REPORTS_DIR / "6over_dev.json"
 FINAL_REPORT = REPORTS_DIR / "6over_final.json"
+DEV_MATCHES = REPORTS_DIR / "6over_dev_matches.parquet"
+FINAL_MATCHES = REPORTS_DIR / "6over_final_matches.parquet"
 
 
 def market_rows(split: str, start: str | None = None) -> pd.DataFrame:
@@ -42,6 +44,25 @@ def market_rows(split: str, start: str | None = None) -> pd.DataFrame:
         r = r[r.date >= start]
     r["venue_key"] = venue_key(r.venue, r.city)
     return r.sort_values("date", kind="stable").reset_index(drop=True)
+
+
+def per_match(rows: pd.DataFrame, raw, sims) -> pd.DataFrame:
+    """One row per match: raw and calibrated forecast, PIT, and the bet the rule would place."""
+    out = []
+    for r, rs, s in zip(rows.itertuples(), raw, sims):
+        line, y = float(r.pre_match_line), float(r.runs_at_6ov)
+        p_over, p_under = float(np.mean(s > line)), float(np.mean(s < line))
+        side = decide(p_over, p_under)
+        out.append({"match_id": r.match_id, "date": r.date, "line": line, "actual": y,
+                    "raw_median": float(np.median(rs)), "cal_median": float(np.median(s)),
+                    "cal_p10": float(np.quantile(s, 0.1)), "cal_p90": float(np.quantile(s, 0.9)),
+                    "p_over": p_over, "p_under": p_under, "pit": pit(s, y),
+                    "side": side, "pnl": pnl(side, line, y)})
+    return pd.DataFrame(out)
+
+
+def _pit_histogram(matches: pd.DataFrame) -> list[int]:
+    return np.histogram(matches.pit, bins=10, range=(0, 1))[0].tolist()
 
 
 def prepare(cutoff: str):
@@ -61,8 +82,8 @@ def dev() -> dict:
     levels = level_report(ctx.skill, balls[balls.date < DEV_END],
                           balls[(balls.date >= DEV_END) & (balls.date < TRAIN_END)])
     print(levels.to_string(index=False), flush=True)
-    if not levels.passes.all():
-        raise SystemExit("a shrinkage level failed the density gate; see the table above")
+    # The density gate is report-only by user decision (2026-10-05): all levels are kept
+    # for a later feature-importance analysis.
 
     cols = feature_columns(ctx.skill.levels)
     tr = (frame.date < DEV_END).to_numpy()
@@ -76,10 +97,13 @@ def dev() -> dict:
     for name in MODELS:
         m = fit_model(name, X.loc[tr], y[tr], dates[tr], cols)
         sims = simulate_matches(rows, ctx, m, table, DEV_N_SIMS)
-        results[name] = {"val_log_loss": log_loss(m.predict(X.loc[va]), y[va]), **summary(sims, ys)}
+        cal = fit_calibration(sims, ys)
+        results[name] = {"val_log_loss": log_loss(m.predict(X.loc[va]), y[va]),
+                         "raw": summary(sims, ys),
+                         "calibrated": summary([apply(cal, s) for s in sims], ys)}  # in-sample
         fitted[name] = (m, sims)
         print(name, results[name], flush=True)
-    best = min(results, key=lambda n: (results[n]["mae"], results[n]["crps"]))
+    best = min(results, key=lambda n: (results[n]["calibrated"]["mae"], results[n]["calibrated"]["crps"]))
     m, sims = fitted[best]
 
     groups = importance_groups(ctx.skill.levels)
@@ -97,8 +121,15 @@ def dev() -> dict:
             kept = cols
 
     cal = fit_calibration(sims, ys)
+    cal_sims = [apply(cal, s) for s in sims]
+    matches = per_match(rows, sims, cal_sims)
+    ensure_dirs()
+    matches.to_parquet(DEV_MATCHES)
     report = {
         "levels": levels.to_dict(orient="records"),
+        "level_names": [lv.name for lv in ctx.skill.levels],
+        "n_sims": DEV_N_SIMS,
+        "pit_histogram": _pit_histogram(matches),
         "k": ctx.skill.k,
         "models": results,
         "model": best,
@@ -107,9 +138,8 @@ def dev() -> dict:
         "calibration": cal.__dict__,
         "dev_raw": summary(sims, ys),
         # in-sample for the calibration: a sanity check, not a result
-        "dev_calibrated": summary([apply(cal, s) for s in sims], ys),
+        "dev_calibrated": summary(cal_sims, ys),
     }
-    ensure_dirs()
     DEV_REPORT.write_text(json.dumps(report, indent=2, default=float))
     return report
 
@@ -118,18 +148,33 @@ def final(force: bool = False) -> dict:
     if FINAL_REPORT.exists() and not force:
         raise SystemExit("the holdout was already scored; --force reruns it (say so in any write-up)")
     dev_report = json.loads(DEV_REPORT.read_text())
+    # Fail early: cheap checks before the slow prepare().
+    rows = market_rows("holdout")
+    check_xi(rows, pd.read_parquet(PARSED / "playing_xi.parquet"))
+    missing = [c for c in dev_report["kept_columns"] if c not in feature_columns(LEVELS)]
+    if missing:
+        raise SystemExit(f"dev kept_columns not in the current feature set: {missing}")
+    cal = Calibration(**dev_report["calibration"])
+    if not 0.5 < cal.s < 2.5:
+        raise SystemExit(f"dev calibration spread s={cal.s} is at the edge of its grid")
     balls, ctx, frame, table = prepare(TRAIN_END)
     tr = (frame.date < TRAIN_END).to_numpy()
     m = fit_model(dev_report["model"], frame.loc[tr], frame.y.to_numpy()[tr],
                   frame.date[tr], dev_report["kept_columns"])
-    rows = market_rows("holdout")
-    check_xi(rows, ctx.xi)
     ys = rows.runs_at_6ov.to_numpy(float)
     raw = simulate_matches(rows, ctx, m, table, FINAL_N_SIMS)
-    sims = [apply(Calibration(**dev_report["calibration"]), s) for s in raw]
+    sims = [apply(cal, s) for s in raw]
+    matches = per_match(rows, raw, sims)
+    ensure_dirs()
+    matches.to_parquet(FINAL_MATCHES)
     bar = comparison_bar("holdout").set_index("market_type").loc[SIX]
     report = {
         "model": dev_report["model"],
+        "kept_columns": dev_report["kept_columns"],
+        "forced": force,
+        "levels": [lv.name for lv in ctx.skill.levels],
+        "n_sims": FINAL_N_SIMS,
+        "pit_histogram": _pit_histogram(matches),
         "raw": summary(raw, ys),
         "calibrated": summary(sims, ys),
         "market_mae": float(bar.market_mae),
@@ -137,7 +182,6 @@ def final(force: bool = False) -> dict:
         "backtest": backtest(sims, rows.pre_match_line.to_numpy(float), ys),
     }
     report["beats_bar"] = report["calibrated"]["mae"] < report["market_mae"] - report["detectable_gain"]
-    ensure_dirs()
     FINAL_REPORT.write_text(json.dumps(report, indent=2, default=float))
     return report
 
