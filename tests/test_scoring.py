@@ -26,7 +26,8 @@ def test_coverage_of_p10_p90():
 def test_calibration_removes_a_constant_bias():
     rng = np.random.default_rng(1)
     truth = rng.normal(50, 10, 300)
-    sims = [rng.normal(t - 15, 10, 2000) for t in truth]   # every forecast 15 runs low
+    # every forecast 15 runs low on average; per-match noise keeps the 80% target reachable
+    sims = [rng.normal(t - 15 + rng.normal(0, 7), 10, 2000) for t in truth]
     cal = fit_calibration(sims, truth)
     fixed = [apply(cal, s) for s in sims]
     assert abs(np.mean([np.median(f) for f in fixed]) - truth.mean()) < 1.0
@@ -62,3 +63,12 @@ def test_backtest_totals():
     assert out["n_bets"] == 3
     assert out["pnl"] == pytest.approx(0.95 - 1.0 - 1.0)
     assert out["hit_rate"] == pytest.approx(1 / 3)
+
+
+def test_calibration_raises_when_the_coverage_target_is_unreachable():
+    rng = np.random.default_rng(2)
+    meds = rng.normal(50, 10, 200)
+    sims = [np.full(100, m) for m in meds]          # point masses: no spread multiplier widens them
+    ys = meds + rng.normal(0, 10, 200)
+    with pytest.raises(ValueError, match="80% coverage"):
+        fit_calibration(sims, ys)

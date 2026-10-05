@@ -47,7 +47,10 @@ def fit_calibration(sims, ys) -> Calibration:
     b, a = np.polyfit(med, ys, 1)
     grid = np.linspace(0.5, 2.5, 201)
     cov = np.array([coverage([apply(Calibration(a, b, s), x) for x in sims], ys) for s in grid])
-    return Calibration(float(a), float(b), float(grid[np.argmin(np.abs(cov - 0.8))]))
+    s = float(grid[np.argmin(np.abs(cov - 0.8))])
+    if s in (grid[0], grid[-1]):
+        raise ValueError(f"80% coverage target not reachable inside [{grid[0]}, {grid[-1]}]: s={s}")
+    return Calibration(float(a), float(b), s)
 
 
 def summary(sims, ys) -> dict:
