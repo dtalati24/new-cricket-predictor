@@ -2,12 +2,16 @@
 """The 6-over pipeline.
 
     python -m src.run_6over dev     train < 2024; choose model, prune, calibrate on 2024
-    python -m src.run_6over final   train < 2025; score the 2025+ holdout ONCE
+    python -m src.run_6over final [--all | --model NAME] [--force]
+                                    train < 2025; score the 2025+ holdout ONCE per model
 
-`final` refuses to run twice unless given --force, so the holdout is looked at once.
+`final` scores the dev-chosen model (pre-registered); --all also scores the other two as
+comparisons, each with its own calibration fitted on 2024. It refuses to rescore a model
+unless given --force, so each model's holdout is looked at once.
 """
 from __future__ import annotations
 
+import gc
 import json
 import sys
 
@@ -31,9 +35,7 @@ SIX = "1_INNING_6_OVR_LINE"
 DEV_N_SIMS = 2_000      # model choice; median MC error ~0.3 runs per match, averaged over 435
 FINAL_N_SIMS = 10_000
 DEV_REPORT = REPORTS_DIR / "6over_dev.json"
-FINAL_REPORT = REPORTS_DIR / "6over_final.json"
 DEV_MATCHES = REPORTS_DIR / "6over_dev_matches.parquet"
-FINAL_MATCHES = REPORTS_DIR / "6over_final_matches.parquet"
 
 
 def market_rows(split: str, start: str | None = None) -> pd.DataFrame:
@@ -159,46 +161,133 @@ def dev() -> dict:
     return report
 
 
-def final(force: bool = False) -> dict:
-    if FINAL_REPORT.exists() and not force:
-        raise SystemExit("the holdout was already scored; --force reruns it (say so in any write-up)")
+def final_paths(name: str):
+    return (REPORTS_DIR / f"6over_final_{name}.json",
+            REPORTS_DIR / f"6over_final_{name}_matches.parquet")
+
+
+def check_not_scored(name: str, force: bool) -> None:
+    if final_paths(name)[0].exists() and not force:
+        raise SystemExit(f"the holdout was already scored for {name}; --force reruns it "
+                         "(say so in any write-up)")
+
+
+def _saved_dev(name: str, dev_report: dict) -> dict | None:
+    """Dev calibration already on disk: the chosen model's, or a resumed non-chosen one."""
+    if name == dev_report["model"]:
+        return {"calibration": dev_report["calibration"], "kept_columns": dev_report["kept_columns"]}
+    path = REPORTS_DIR / f"6over_dev_{name}.json"
+    return json.loads(path.read_text()) if path.exists() else None
+
+
+def dev_calibration(name: str, dev_report: dict, prepared=None) -> dict:
+    """Calibration of `name` fitted on 2024 (never on holdout). `prepared` = prepare(DEV_END)."""
+    saved = _saved_dev(name, dev_report)
+    if saved is not None:
+        return saved
+    balls, ctx, frame, table = prepared
+    cols = feature_columns(ctx.skill.levels)    # the dev run pruned nothing
+    tr = (frame.date < DEV_END).to_numpy()
+    rows = market_rows("train", start=DEV_END)
+    ys = rows.runs_at_6ov.to_numpy(float)
+    m = fit_model(name, frame.loc[tr], frame.y.to_numpy()[tr], frame.date[tr], cols)
+    raw = simulate_matches(rows, ctx, m, table, DEV_N_SIMS)
+    cal = fit_calibration(raw, ys)
+    cal_sims = [apply(cal, s) for s in raw]
+    out = {"calibration": cal.__dict__, "kept_columns": cols, "raw": summary(raw, ys),
+           "calibrated": summary(cal_sims, ys), "n_sims": DEV_N_SIMS}
+    ensure_dirs()
+    per_match(rows, raw, cal_sims).to_parquet(REPORTS_DIR / f"6over_dev_{name}_matches.parquet")
+    (REPORTS_DIR / f"6over_dev_{name}.json").write_text(json.dumps(out, indent=2, default=float))
+    was = dev_report["models"][name]["calibrated"]
+    was_mae = was["mae"] if was else float("nan")
+    print(f"{name}: dev calibrated MAE {out['calibrated']['mae']:.3f} "
+          f"(dev run said {was_mae:.3f})", flush=True)
+    if not abs(out["calibrated"]["mae"] - was_mae) <= 0.05:
+        print(f"WARNING: {name} dev MAE differs from the dev run by more than 0.05", flush=True)
+    return out
+
+
+def final(models: list[str], force: bool = False) -> dict:
+    bad = [n for n in models if n not in MODELS]
+    if bad:
+        raise SystemExit(f"unknown model(s) {bad}; expected from {list(MODELS)}")
     dev_report = json.loads(DEV_REPORT.read_text())
+    chosen = dev_report["model"]
     # Fail early: cheap checks before the slow prepare().
+    for n in models:
+        check_not_scored(n, force)
     rows = market_rows("holdout")
     check_xi(rows, pd.read_parquet(PARSED / "playing_xi.parquet"))
-    missing = [c for c in dev_report["kept_columns"] if c not in feature_columns(LEVELS)]
-    if missing:
-        raise SystemExit(f"dev kept_columns not in the current feature set: {missing}")
-    cal = Calibration(**dev_report["calibration"])
-    if not 0.5 < cal.s < 2.5:
-        raise SystemExit(f"dev calibration spread s={cal.s} is at the edge of its grid")
+    for n in models:
+        saved = _saved_dev(n, dev_report)
+        if saved is None:
+            continue
+        missing = [c for c in saved["kept_columns"] if c not in feature_columns(LEVELS)]
+        if missing:
+            raise SystemExit(f"{n}: dev kept_columns not in the current feature set: {missing}")
+        if n == chosen and not 0.5 < saved["calibration"]["s"] < 2.5:
+            raise SystemExit(f"dev calibration spread s={saved['calibration']['s']} "
+                             "is at the edge of its grid")
+    # Phase A: dev calibrations still to compute, on one prepare(DEV_END), freed before phase B.
+    todo = [n for n in models if _saved_dev(n, dev_report) is None]
+    if todo:
+        prepared = prepare(DEV_END)
+        for n in todo:
+            s = dev_calibration(n, dev_report, prepared)["calibration"]["s"]
+            if not 0.5 < s < 2.5:
+                raise SystemExit(f"{n}: dev calibration spread s={s} is at the edge of its grid")
+        del prepared
+        gc.collect()
+    # Phase B: score each model, writing its result before starting the next.
     balls, ctx, frame, table = prepare(TRAIN_END)
     tr = (frame.date < TRAIN_END).to_numpy()
-    m = fit_model(dev_report["model"], frame.loc[tr], frame.y.to_numpy()[tr],
-                  frame.date[tr], dev_report["kept_columns"])
     ys = rows.runs_at_6ov.to_numpy(float)
-    raw = simulate_matches(rows, ctx, m, table, FINAL_N_SIMS)
-    sims = [apply(cal, s) for s in raw]
-    matches = per_match(rows, raw, sims)
-    ensure_dirs()
-    matches.to_parquet(FINAL_MATCHES)
     bar = comparison_bar("holdout").set_index("market_type").loc[SIX]
-    report = {
-        "model": dev_report["model"],
-        "kept_columns": dev_report["kept_columns"],
-        "forced": force,
-        "levels": [lv.name for lv in ctx.skill.levels],
-        "n_sims": FINAL_N_SIMS,
-        "pit_histogram": _pit_histogram(matches),
-        "raw": summary(raw, ys),
-        "calibrated": summary(sims, ys),
-        "market_mae": float(bar.market_mae),
-        "detectable_gain": float(bar.detectable_gain),
-        "backtest": backtest(sims, rows.pre_match_line.to_numpy(float), ys),
-    }
-    report["beats_bar"] = report["calibrated"]["mae"] < report["market_mae"] - report["detectable_gain"]
-    FINAL_REPORT.write_text(json.dumps(report, indent=2, default=float))
-    return report
+    reports = {}
+    for n in models:
+        dc = dev_calibration(n, dev_report)
+        cal = Calibration(**dc["calibration"])
+        m = fit_model(n, frame.loc[tr], frame.y.to_numpy()[tr], frame.date[tr], dc["kept_columns"])
+        raw = simulate_matches(rows, ctx, m, table, FINAL_N_SIMS)
+        sims = [apply(cal, s) for s in raw]
+        matches = per_match(rows, raw, sims)
+        report = {
+            "model": n,
+            "role": "pre-registered" if n == chosen else "comparison",
+            "kept_columns": dc["kept_columns"],
+            "calibration": cal.__dict__,
+            "forced": force,
+            "levels": [lv.name for lv in ctx.skill.levels],
+            "n_sims": FINAL_N_SIMS,
+            "pit_histogram": _pit_histogram(matches),
+            "raw": summary(raw, ys),
+            "calibrated": summary(sims, ys),
+            "market_mae": float(bar.market_mae),
+            "detectable_gain": float(bar.detectable_gain),
+            "backtest": backtest(sims, rows.pre_match_line.to_numpy(float), ys),
+        }
+        report["beats_bar"] = report["calibrated"]["mae"] < report["market_mae"] - report["detectable_gain"]
+        json_path, parquet_path = final_paths(n)
+        ensure_dirs()
+        matches.to_parquet(parquet_path)
+        json_path.write_text(json.dumps(report, indent=2, default=float))
+        reports[n] = report
+        print(n, "done", flush=True)
+    return reports
+
+
+def resolve_models(argv: list[str], chosen: str) -> list[str]:
+    """Models for `final` from its flags; default is the dev-chosen model only."""
+    if "--all" in argv:
+        return [chosen] + [n for n in MODELS if n != chosen]
+    if "--model" in argv:
+        i = argv.index("--model")
+        name = argv[i + 1] if i + 1 < len(argv) else ""
+        if name not in MODELS:
+            raise SystemExit(f"--model needs one of {list(MODELS)}, got {name!r}")
+        return [name]
+    return [chosen]
 
 
 if __name__ == "__main__":
@@ -206,6 +295,8 @@ if __name__ == "__main__":
     if step == "dev":
         print(json.dumps(dev(), indent=2, default=float))
     elif step == "final":
-        print(json.dumps(final(force="--force" in sys.argv), indent=2, default=float))
+        chosen = json.loads(DEV_REPORT.read_text())["model"]
+        print(json.dumps(final(resolve_models(sys.argv[2:], chosen), force="--force" in sys.argv),
+                         indent=2, default=float))
     else:
-        raise SystemExit("usage: python -m src.run_6over dev|final [--force]")
+        raise SystemExit("usage: python -m src.run_6over dev | final [--all | --model NAME] [--force]")

@@ -1,8 +1,10 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from src.bet.backtest import decide, pnl
-from src.run_6over import choose_model, per_match
+import src.run_6over as run
+from src.run_6over import check_not_scored, choose_model, final_paths, per_match, resolve_models
 
 
 def test_per_match_columns_and_betting_rule():
@@ -31,3 +33,30 @@ def test_choose_model_ranks_uncalibrated_last():
     del results["d"]
     assert choose_model(results) == "c"
     assert choose_model({"a": {"calibrated": None}, "b": ok(9.0, 9.0)}) == "b"
+
+
+def test_final_paths_are_per_model():
+    paths = {n: final_paths(n) for n in ("logistic", "lightgbm", "xgboost")}
+    assert len({p for pair in paths.values() for p in pair}) == 6
+    assert paths["xgboost"][0].name == "6over_final_xgboost.json"
+    assert paths["xgboost"][1].name == "6over_final_xgboost_matches.parquet"
+
+
+def test_check_not_scored_guards_each_model(tmp_path, monkeypatch):
+    monkeypatch.setattr(run, "REPORTS_DIR", tmp_path)
+    check_not_scored("logistic", False)
+    final_paths("logistic")[0].write_text("{}")
+    with pytest.raises(SystemExit, match="already scored"):
+        check_not_scored("logistic", False)
+    check_not_scored("logistic", True)
+    check_not_scored("xgboost", False)
+
+
+def test_resolve_models():
+    assert resolve_models([], "lightgbm") == ["lightgbm"]
+    assert resolve_models(["--all"], "lightgbm") == ["lightgbm", "logistic", "xgboost"]
+    assert resolve_models(["--model", "xgboost", "--force"], "logistic") == ["xgboost"]
+    with pytest.raises(SystemExit):
+        resolve_models(["--model", "nope"], "logistic")
+    with pytest.raises(SystemExit):
+        resolve_models(["--model"], "logistic")
