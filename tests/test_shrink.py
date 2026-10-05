@@ -89,3 +89,44 @@ def test_levels_are_the_spec_hierarchy():
                        "batter_x_venue", "bowler_x_venue"}
     assert by["batter_x_venue"].parent == "batter"
     assert by["bowler_x_venue"].parent == "bowler"
+
+
+def test_child_estimate_uses_the_leave_own_out_parent():
+    ks, kb = 7.0, 5.0
+    league = np.full(11, 1 / 11)
+    balls = pd.DataFrame({
+        "batter_id": ["b1"] * 10 + ["b2"] * 4,
+        "bowler_type": ["pace"] * 6 + ["spin"] * 4 + ["pace"] * 4,
+        "date": pd.to_datetime(["2020-01-01"] * 14),
+        "outcome": pd.Categorical(["4"] * 6 + ["6"] * 4 + ["1"] * 4, categories=CLASSES)})
+    levels = (Level("batter", ("batter_id",), None),
+              Level("batter_x_bowlertype", ("batter_id", "bowler_type"), "batter"))
+    skill = SkillModel(
+        league=league, k={"batter": kb, "batter_x_bowlertype": ks},
+        cum={"batter": cumulative_counts(balls, ["batter_id"]),
+             "batter_x_bowlertype": cumulative_counts(balls, ["batter_id", "bowler_type"])},
+        levels=levels)
+    q = pd.DataFrame({"batter_id": ["b1", "b1", "b2"],
+                      "bowler_type": ["pace", "spin", "pace"],
+                      "date": pd.to_datetime(["2020-02-01"] * 3)})
+    e = estimates(skill, q)
+    i4, i6, i1 = CLASSES.index("4"), CLASSES.index("6"), CLASSES.index("1")
+    # b1 batter-level: 6 fours, 4 sixes. Full (not leave-own-out) estimate is returned.
+    assert e["batter"][0, i4] == pytest.approx((6 + kb / 11) / (10 + kb))
+    # b1 x pace (6 fours): parent = batter counts minus these = 4 sixes, shrunk to league.
+    par = (np.eye(11)[i6] * 4 + kb * league) / (4 + kb)
+    exp = (np.eye(11)[i4] * 6 + ks * par) / (6 + ks)
+    np.testing.assert_allclose(e["batter_x_bowlertype"][0], exp)
+    # b2 x pace holds ALL of b2's balls: nothing left over, parent is the league.
+    exp2 = (np.eye(11)[i1] * 4 + ks * league) / (4 + ks)
+    np.testing.assert_allclose(e["batter_x_bowlertype"][2], exp2)
+
+
+def test_grandchild_chains_are_rejected():
+    levels = (Level("a", ("batter_id",), None), Level("b", ("batter_id", "bowler_type"), "a"),
+              Level("c", ("batter_id", "bowler_type", "venue_key"), "b"))
+    balls = pd.DataFrame({"batter_id": ["x"], "bowler_type": ["p"], "venue_key": ["v"],
+                          "date": pd.to_datetime(["2020-01-01"]),
+                          "outcome": pd.Categorical(["4"], categories=CLASSES)})
+    with pytest.raises(ValueError):
+        fit(balls, "2021-01-01", levels)

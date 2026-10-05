@@ -81,41 +81,69 @@ class SkillModel:
     levels: tuple[Level, ...]
 
 
+def _parent_of(lv: Level, by_name: dict[str, Level]) -> Level | None:
+    """The parent Level, checked to be a top level (own parent = league). Deeper chains unsupported."""
+    if lv.parent is None:
+        return None
+    par = by_name[lv.parent]
+    if par.parent is not None:
+        raise ValueError(f"{lv.name}: parent {par.name} has its own parent; unsupported")
+    return par
+
+
+def leave_own_out_parent(parent_counts: np.ndarray, own_counts: np.ndarray,
+                         league: np.ndarray, k_parent: float) -> np.ndarray:
+    """A child's parent vector: the parent group's estimate with the child's own balls removed.
+
+    The parent's counts include the child's balls; leaving them in makes the child look
+    unscattered around its parent (k -> bound). fit() and estimates() both use this, so the
+    fitted k is applied against the same kind of parent. Parent's own parent is the league.
+    """
+    return shrink(parent_counts - own_counts, np.tile(league, (len(own_counts), 1)), k_parent)
+
+
 def fit(balls: pd.DataFrame, cutoff: str, levels: tuple[Level, ...] = LEVELS) -> SkillModel:
     """k from balls before `cutoff`; running counts from all balls (as_of keeps them honest)."""
     train = balls[balls.date < cutoff]
     league = train.outcome.value_counts().reindex(CLASSES, fill_value=0).to_numpy(float)
     league = league / league.sum()
     by_name = {lv.name: lv for lv in levels}
-    seen: dict[str, tuple[pd.DataFrame, np.ndarray, np.ndarray]] = {}  # keys, counts, parent
+    for lv in levels:
+        _parent_of(lv, by_name)  # reject unsupported chains before any fitting
+    seen: dict[str, tuple[pd.DataFrame, np.ndarray]] = {}  # keys, counts
     k: dict[str, float] = {}
     for lv in levels:
         cols = list(lv.group_cols)
         tot = totals(train, cols)
         counts = tot[CLASSES].to_numpy(float)
-        if lv.parent is None:
+        par = _parent_of(lv, by_name)
+        if par is None:
             parent = np.tile(league, (len(tot), 1))
         else:
-            # Leave-own-out: the parent's counts include this group's own balls, which
-            # would make the group look unscattered (k -> bound). Fit k against the
-            # parent estimate with the group's own counts removed.
-            pcols = list(by_name[lv.parent].group_cols)
-            pkeys, pcounts, pparent = seen[lv.parent]
+            pkeys, pcounts = seen[par.name]
+            pcols = list(par.group_cols)
             idx = tot[pcols].merge(pkeys.assign(_i=np.arange(len(pkeys))),
                                    on=pcols, how="left")["_i"].to_numpy()
-            parent = shrink(pcounts[idx] - counts, pparent[idx], k[lv.parent])
+            parent = leave_own_out_parent(pcounts[idx], counts, league, k[par.name])
         k[lv.name] = fit_k(counts, parent)
-        seen[lv.name] = (tot[cols].reset_index(drop=True), counts, parent)
+        seen[lv.name] = (tot[cols].reset_index(drop=True), counts)
     cum = {lv.name: cumulative_counts(balls, list(lv.group_cols)) for lv in levels}
     return SkillModel(league, k, cum, tuple(levels))
 
 
 def estimates(skill: SkillModel, query: pd.DataFrame) -> dict[str, np.ndarray]:
+    """Per-level estimates. A child shrinks toward its leave-own-out parent (as k was fitted);
+    out[parent] itself stays the full parent estimate."""
+    by_name = {lv.name: lv for lv in skill.levels}
     out: dict[str, np.ndarray] = {}
     for lv in skill.levels:
         counts = counts_before(skill.cum[lv.name], query, list(lv.group_cols))
-        parent = (np.tile(skill.league, (len(query), 1)) if lv.parent is None
-                  else out[lv.parent])
+        par = _parent_of(lv, by_name)
+        if par is None:
+            parent = np.tile(skill.league, (len(query), 1))
+        else:
+            pcounts = counts_before(skill.cum[par.name], query, list(par.group_cols))
+            parent = leave_own_out_parent(pcounts, counts, skill.league, skill.k[par.name])
         out[lv.name] = shrink(counts, parent, skill.k[lv.name])
     return out
 
