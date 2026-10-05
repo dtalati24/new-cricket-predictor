@@ -1,0 +1,27 @@
+# Raw inputs and every derived table. ~5.7 GB, reproducible by re-running the
+# pipeline. The Betfair archive is not redistributable.
+data/*
+!data/.gitkeep
+
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Environments
+.venv/
+venv/
+env/
+.env
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

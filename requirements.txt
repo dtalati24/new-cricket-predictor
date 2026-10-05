@@ -1,0 +1,26 @@
+# Ingest: Cricsheet download and the normalised parquet tables.
+requests>=2.31
+pandas>=2.0
+pyarrow>=15.0
+numpy>=1.26
+
+# Skill layer: the Dirichlet-Multinomial concentration is fitted with
+# scipy.optimize.minimize_scalar. scikit-learn supplies the isotonic
+# regression used for distributional recalibration in Phase 3.
+scipy>=1.11
+scikit-learn>=1.4
+
+# Per-ball model bake-off (Phase 2): three algorithms are compared, so both
+# boosting libraries are needed. Multinomial logistic comes from scikit-learn.
+lightgbm>=4.0
+xgboost>=2.0
+
+# Reads the cricketdata package's player_meta.rda for bowling and batting
+# style metadata, without needing R installed.
+pyreadr>=0.5
+
+# Calibration evidence: PIT histograms, reliability diagrams.
+matplotlib>=3.8
+
+# Development
+pytest>=8.0
