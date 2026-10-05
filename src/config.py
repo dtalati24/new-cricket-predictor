@@ -57,18 +57,12 @@ def ensure_dirs() -> None:
         d.mkdir(parents=True, exist_ok=True)
 
 
-# --- global modelling constants --------------------------------------------
-# Temporal splits. THREE slices, not two: a calibration layer fitted on the
-# test slice is simply cheating, and the previous build had no calibration
-# layer to misplace. Boundaries are provisional until Gate 3 reports the real
-# year distribution of matched markets.
-# Set from the real Gate 3/4 distribution of usable over-line matches:
-#   2022 282 | 2023 670 | 2024 629 | 2025 596 | 2026 470  (total 2,647)
-# Clean calendar-year boundaries give train 1,581 (59.7%) / calib 596 (22.5%)
-# / test 470 (17.8%) -- close to a 60/20/20 split without a mid-year cut.
+# --- time splits (spec 2026-10-05 section 8) --------------------------------
+# Development: train before DEV_END; choose the model, prune features and fit
+# calibration on DEV_END..TRAIN_END (2024). Final: retrain before TRAIN_END and
+# score the 2025+ holdout once. market.baseline also splits on TRAIN_END.
+DEV_END = "2024-01-01"
 TRAIN_END = "2025-01-01"
-CALIB_END = "2026-01-01"
-# test slice = date >= CALIB_END
 
 # The unconditional-mean MAE for T20 first-innings totals, measured over the
 # full Cricsheet corpus (n=14,002, mean 149.1, sd 41.8). Any model or market
