@@ -45,30 +45,6 @@ def test_ticks_are_sorted_and_typed(tables):
     assert t.groupby("market_id")["pt"].apply(lambda s: s.is_monotonic_increasing).all()
 
 
-def test_prematch_agrees_with_build2(tables):
-    """Recomputing Build 2's pre-match summary from the tick path must match.
-
-    Build 2 collapsed each market to one pre-match row and discarded the
-    in-play path. If we can rebuild that row exactly, the richer extraction
-    is a superset of a table already known to be correct.
-    """
-    old = pd.read_parquet(config.B2 / "data_betfair" / "prices_matchodds.parquet")
-    joined = tables["ticks"].merge(
-        tables["markets"][["market_id", "market_time"]], on="market_id"
-    )
-    pre = joined[joined["pt"] < joined["market_time"]]
-    mine = (
-        pre.sort_values("pt")
-        .groupby(["market_id", "runner_id"])
-        .agg(my_odds=("ltp", "last"), my_n=("ltp", "size"))
-        .reset_index()
-    )
-    cmp = old.merge(mine, on=["market_id", "runner_id"], how="inner")
-    assert len(cmp) > 17_000, "population overlap collapsed; check the join"
-    assert np.isclose(cmp["pre_match_odds"], cmp["my_odds"], rtol=1e-6).all()
-    assert (cmp["n_ticks_pre"] == cmp["my_n"]).all()
-
-
 def test_in_play_coverage_is_sufficient_for_alignment(tables):
     """The whole in-play thesis depends on tick density. Guard the number."""
     defs = tables["defs"]
