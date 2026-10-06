@@ -127,6 +127,66 @@ def test_a_gb_code_falls_back_to_an_unverified_country_hit(tmp_path, monkeypatch
     assert r.source == "geocode:city+unverified_country" and r.country == "India"
 
 
+def _hits(*codes):
+    return {c: {"latitude": 1.0, "longitude": 2.0, "timezone": "Z/Z", "country": c, "country_code": c}
+            for c in codes}
+
+
+def _search(hits_by_name):
+    """fake get: results for a name, in the given order of country codes"""
+    def get(url, params, timeout):
+        return FakeResponse({"results": [_hits(c)[c] for c in hits_by_name.get(params["name"], [])]})
+    return get
+
+
+def test_weak_codes_are_hints_that_get_cross_checked(tmp_path, monkeypatch):
+    monkeypatch.setattr(W, "WEATHER_DIR", tmp_path)
+    monkeypatch.setattr(W, "VENUES_CSV", tmp_path / "venues.csv")
+    monkeypatch.setattr(W, "OVERRIDES", tmp_path / "none.csv")
+    pg = lambda cc, names: W._geocode_venue("City", "Venue", cc, _search(names), 0)  # noqa: E731
+    # weak code, filtered and unfiltered agree: trusted
+    assert pg("GB", {"City": ["GB", "IN"]})[1] == "geocode:city"
+    # weak code, filtered hit exists but the unfiltered top is another country: keep filtered, tag
+    g, src = pg("GB", {"City": ["IN", "GB"]})
+    assert g["country_code"] == "GB" and src == "geocode:city+unverified_country"
+    # weak code, nothing in that country: unfiltered hit, tagged
+    g, src = pg("JM", {"City": ["GY"]})
+    assert g["country_code"] == "GY" and src == "geocode:city+unverified_country"
+    # strong code never leaves its country
+    assert pg("IN", {"City": ["GY"]}) == (None, "unresolved")
+    assert pg("IN", {"City": ["GY", "IN"]})[1] == "geocode:city"
+    # no code at all: tagged
+    assert pg(np.nan, {"Venue": ["IN"]})[1] == "geocode:venue+unverified_country"
+
+
+def test_venue_countries_treats_gb_and_jm_as_weak(tmp_path, monkeypatch):
+    mk = pd.DataFrame({"match_id": ["1", "2", "3", "4", "5"],
+                       "country_code": ["JM", "JM", "JM", "GY", "GB"]})
+    mk.to_parquet(tmp_path / "mk.parquet")
+    monkeypatch.setattr(W, "MARKETS", tmp_path / "mk.parquet")
+    m = pd.DataFrame({"match_id": ["1", "2", "3", "4", "5"], "venue": ["P", "P", "P", "P", "Q"],
+                      "city": ["x"] * 5})
+    assert W.venue_countries(m).to_dict() == {"P": "GY", "Q": "GB"}
+
+
+def test_check_venues_flags_a_wrong_timezone():
+    venues = pd.DataFrame({"timezone": ["Asia/Kolkata", "Europe/London", None],
+                           "n_matches": [5, 3, 9]},
+                          index=pd.Index(["Mumbai Ground", "Wrong Ground", "No Tz"], name="venue_key"))
+    matches = pd.DataFrame({"match_id": ["a", "b", "c", "d", "e"],
+                            "venue": ["Mumbai Ground"] * 2 + ["Wrong Ground"] * 2 + ["No Tz"],
+                            "city": None})
+    # Mumbai: 14:00Z = 19:30 local; Wrong Ground: 02:00Z = 02:00 (GMT in January); No Tz: skipped
+    starts = pd.Series(pd.to_datetime(["2024-01-10 14:00", "2024-01-11 14:00", "2024-01-10 02:00",
+                                       "2024-01-11 02:00", "2024-01-10 02:00"], utc=True),
+                       index=list("abcde"))
+    out = W.check_venues(venues, matches, starts)
+    assert out.index.tolist() == ["Mumbai Ground", "Wrong Ground"]
+    assert out.loc["Mumbai Ground", "median_hour"] == 19.5 and not out.loc["Mumbai Ground", "suspect"]
+    assert out.loc["Wrong Ground", "median_hour"] == 2.0 and out.loc["Wrong Ground", "suspect"]
+    assert out.loc["Wrong Ground", "n_start"] == 2
+
+
 def test_date_windows_never_exceed_14_days():
     d = [dt.date(2024, 1, 1), dt.date(2024, 1, 5), dt.date(2024, 1, 14), dt.date(2024, 1, 15),
          dt.date(2024, 3, 1)]
@@ -134,6 +194,14 @@ def test_date_windows_never_exceed_14_days():
     assert w == [(dt.date(2024, 1, 1), dt.date(2024, 1, 14)),
                  (dt.date(2024, 1, 15), dt.date(2024, 1, 15)),
                  (dt.date(2024, 3, 1), dt.date(2024, 3, 1))]
+
+
+def test_download_windows_cover_the_day_before_and_after_each_match():
+    for dates, want in ([["2024-05-02"], [("2024-05-01", "2024-05-03")]],
+                        [["2024-05-02", "2024-05-20", "2024-05-21"],
+                         [("2024-05-01", "2024-05-03"), ("2024-05-19", "2024-05-22")]]):
+        w = [(str(a), str(b)) for a, b in W.date_windows(W._padded(pd.to_datetime(dates)))]
+        assert w == want and all((pd.Timestamp(b) - pd.Timestamp(a)).days < 14 for a, b in w)
 
 
 def _hourly(start="2024-05-02 00:00", periods=24, venue="V"):
@@ -207,9 +275,9 @@ def test_download_skips_cached_windows(tmp_path, monkeypatch):
     matches = pd.DataFrame({"venue_key": ["V"], "date": pd.to_datetime(["2024-05-02"])})
     W.download_weather(venues, matches, get=get, pause=0)
     W.download_weather(venues, matches, get=get, pause=0)
-    assert calls == ["2024-05-02"], "second run reuses the cache"
+    assert calls == ["2024-05-01"], "second run reuses the cache; window starts a day early"
     assert pd.read_parquet(tmp_path / "hourly.parquet").venue_key.unique().tolist() == ["V"]
-    assert [p.name for p in (tmp_path / "cache").iterdir()] == ["V_1.000_2.000_2024-05-02_2024-05-02.parquet"]
+    assert [p.name for p in (tmp_path / "cache").iterdir()] == ["V_1.000_2.000_2024-05-01_2024-05-03.parquet"]
     venues.loc["V", "latitude"] = 1.5                                  # corrected coordinates refetch
     out = W.download_weather(venues, matches, get=get, pause=0)
-    assert calls == ["2024-05-02"] * 2 and len(out) == 24, "old-coordinate rows are not mixed in"
+    assert calls == ["2024-05-01"] * 2 and len(out) == 24, "old-coordinate rows are not mixed in"

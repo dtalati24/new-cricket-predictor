@@ -36,6 +36,7 @@ WEATHER = VARS + ["start_hour_local", "is_night"]
 NIGHT_HOUR = 17
 DAY_HOURS = (14, 20)
 PAUSE_S = 1.0
+WEAK_CODES = {"GB", "JM"}     # Betfair defaults: GB is its jurisdiction, JM the Caribbean
 MAX_RETRIES = 5
 BACKOFF_S = 60.0
 
@@ -59,14 +60,14 @@ def venue_cities(matches: pd.DataFrame) -> pd.DataFrame:
 def venue_countries(matches: pd.DataFrame) -> pd.Series:
     """Most common Betfair `country_code` per venue_key; venues with none are absent.
 
-    NB Betfair labels most non-UK cricket 'GB' (its home market), so GB is only used for
-    a venue when no other code was ever seen for it.
+    NB Betfair labels most non-UK cricket 'GB' (its home market) and Caribbean cricket 'JM',
+    so a WEAK_CODES code is only used for a venue when no other code was ever seen for it.
     """
     mk = pd.read_parquet(MARKETS, columns=["match_id", "country_code"]).dropna().drop_duplicates()
     m = matches[["match_id", "venue", "city"]].merge(mk, on="match_id")
     m["venue_key"] = venue_key(m.venue, m.city)
     n = m.groupby(["venue_key", "country_code"]).size().rename("n").reset_index()
-    n["gb"] = n.country_code == "GB"
+    n["gb"] = n.country_code.isin(WEAK_CODES)
     best = n.sort_values(["venue_key", "gb", "n"], ascending=[True, True, False]).drop_duplicates("venue_key")
     return best.set_index("venue_key").country_code
 
@@ -100,14 +101,32 @@ def geocode(name: str, country_code: str | None = None, get=requests.get) -> dic
 
 
 def _geocode_venue(city: str, name: str, cc, get, pause: float):
-    """City then venue name; (hit, source). A GB code is Betfair's default, so when it finds
-    nothing the lookup is repeated without a country and the source is marked for review."""
-    for code, tag in ((cc, ""), (None, "+unverified_country")) if cc == "GB" else ((cc, ""),):
-        for q, src in ((city, "geocode:city"), *(((name, "geocode:venue"),) if name != city else ())):
-            g = geocode(q, code, get)
+    """City then venue name; returns (hit, source).
+
+    A strong code restricts the search to that country. A weak code is only a hint: the
+    unfiltered search runs too, and the source is tagged `+unverified_country` unless both
+    agree on the country. No code at all is tagged too.
+    """
+    unv = "+unverified_country"
+    for q, src in ((city, "geocode:city"), *(((name, "geocode:venue"),) if name != city else ())):
+        if pd.isna(cc):
+            g = geocode(q, None, get)
             time.sleep(pause)
             if g:
-                return g, src + tag
+                return g, src + unv
+            continue
+        f = geocode(q, cc, get)
+        time.sleep(pause)
+        if cc not in WEAK_CODES:
+            if f:
+                return f, src
+            continue
+        u = geocode(q, None, get)
+        time.sleep(pause)
+        if f:
+            return f, src + ("" if u and u["country_code"] == f["country_code"] else unv)
+        if u:
+            return u, src + unv
     return None, "unresolved"
 
 
@@ -164,6 +183,12 @@ def date_windows(dates, max_days: int = 14):
     return out
 
 
+def _padded(dates) -> pd.Series:
+    """Match dates plus the day either side: UTC rows for a local-time day span two UTC dates."""
+    d = pd.to_datetime(pd.Series(list(dates))).dt.normalize()
+    return pd.concat([d - pd.Timedelta(days=1), d, d + pd.Timedelta(days=1)])
+
+
 def fetch_window(lat, lon, start, end, get=requests.get) -> pd.DataFrame:
     """Hourly rows in UTC (`timezone=GMT`), so daylight saving never shifts the grid."""
     params = {"latitude": lat, "longitude": lon, "start_date": str(start), "end_date": str(end),
@@ -189,7 +214,7 @@ def download_weather(venues: pd.DataFrame, matches: pd.DataFrame, get=requests.g
     have = venues.dropna(subset=["latitude", "longitude"])
     used = []
     for vk, v in have.iterrows():
-        for start, end in date_windows(matches.loc[matches.venue_key == vk, "date"]):
+        for start, end in date_windows(_padded(matches.loc[matches.venue_key == vk, "date"])):
             path = CACHE / f"{_slug(vk)}_{v.latitude:.3f}_{v.longitude:.3f}_{start}_{end}.parquet"
             used.append(path)
             if path.exists():
@@ -255,6 +280,27 @@ def match_weather(mv: pd.DataFrame, hourly: pd.DataFrame, starts: pd.Series,
     return out[WEATHER].astype(float)
 
 
+def check_venues(venues: pd.DataFrame, matches: pd.DataFrame, starts: pd.Series | None = None) -> pd.DataFrame:
+    """Median local start hour per venue (Betfair start in the venue's timezone); `suspect`
+    flags medians outside 09:00-23:00, which points at a wrong timezone (wrong city)."""
+    starts = start_times() if starts is None else starts
+    d = matches.assign(venue_key=venue_key(matches.venue, matches.city))[["match_id", "venue_key"]]
+    d = d.assign(start=_utc(pd.Series(starts.reindex(d.match_id).to_numpy(), index=d.index)),
+                 tz=d.venue_key.map(venues.timezone)).dropna(subset=["start", "tz"])
+    parts = []
+    for name, g in d.groupby("tz"):
+        t = g.start.dt.tz_convert(name)
+        parts.append(pd.DataFrame({"venue_key": g.venue_key, "hour": t.dt.hour + t.dt.minute / 60}))
+    cols = ["median_hour", "n_start"]
+    if not parts:
+        return pd.DataFrame(columns=[*cols, "n_matches", "suspect"])
+    out = pd.concat(parts).groupby("venue_key").hour.agg(["median", "count"])
+    out.columns = cols
+    out["n_matches"] = venues.n_matches.reindex(out.index)
+    out["suspect"] = (out.median_hour < 9) | (out.median_hour > 23)
+    return out.sort_values("n_matches", ascending=False)
+
+
 def load_match_weather(balls: pd.DataFrame) -> pd.DataFrame:
     for f in (HOURLY, VENUES_CSV):
         if not f.exists():
@@ -268,9 +314,14 @@ if __name__ == "__main__":
     matches = mens_t20_matches()
     venues = build_venues(matches)
     print(f"{len(venues)} venues")
-    print("unresolved:", venues[venues.latitude.isna()].index.tolist())
-    print("no country_code:", venues[venues.country_code.isna()].index.tolist())
-    print("country unverified:", venues[venues.source.str.contains("unverified", na=False)].index.tolist())
+    by_n = venues.sort_values("n_matches", ascending=False)
+    print("unresolved:", by_n[by_n.latitude.isna()].n_matches.to_dict())
+    unv = by_n[by_n.source.str.contains("unverified", na=False)]
+    print("unverified country (venue: n_matches, city, country_code asked, country got):")
+    print(unv[["n_matches", "city", "country_code", "country"]].to_string())
+    chk = check_venues(venues, matches)
+    print("suspect local start hours (venue: n_matches, median hour):")
+    print(chk[chk.suspect][["n_matches", "median_hour", "n_start"]].to_string())
     print(venues.head(60)[["city", "country", "country_code", "latitude", "longitude", "source",
                            "n_matches"]].to_string())
     if "--download" not in sys.argv:
