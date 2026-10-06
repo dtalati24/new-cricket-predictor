@@ -16,6 +16,10 @@ from src.features.outcomes import CLASSES
 
 WIDE, NOBALL = CLASSES.index("wide"), CLASSES.index("noball")
 MAX_DELIVERIES = 400
+# Identical rows (same striker, bowler and situation) are predicted once. The
+# probabilities are unchanged, so results are bit-identical; early overs, where
+# most simulations share a state, get much cheaper.
+DEDUPE = True
 
 
 def sample_rows(p: np.ndarray, rng: np.random.Generator) -> np.ndarray:
@@ -94,7 +98,12 @@ def simulate(setup: MatchSetup, predict, table: RunTable, n_sims: int = 10_000,
         bat = striker[act]
         X = np.column_stack([setup.static[bat, plan[act, over]], over, legal[act] % 6,
                              wkts[act], runs[act], faced[act, bat], free_hit[act]])
-        cls = sample_rows(predict(X), rng)
+        if DEDUPE:
+            uniq, inv = np.unique(X, axis=0, return_inverse=True)
+            probs = predict(uniq)[inv.reshape(-1)]
+        else:
+            probs = predict(X)
+        cls = sample_rows(probs, rng)
         r = np.zeros(act.size, dtype=int)
         w = np.zeros(act.size, dtype=int)
         for c in np.unique(cls):

@@ -59,14 +59,54 @@ def match_setup(row, ctx: Context) -> MatchSetup:
                       static.reshape(len(batters), len(bowlers), -1))
 
 
-def simulate_matches(rows: pd.DataFrame, ctx: Context, model, table: pd.DataFrame,
-                     n_sims: int, legal_balls: int = 36) -> list[np.ndarray]:
-    cols = feature_columns(ctx.skill.levels)
-    predict = lambda X: model.predict(pd.DataFrame(X, columns=cols))  # noqa: E731
-    rt = run_table(table)
-    out = []
-    for i, row in enumerate(rows.itertuples()):
-        out.append(simulate(match_setup(row, ctx), predict, rt, n_sims, legal_balls, seed=i))
-        if (i + 1) % 50 == 0:
-            print(f"  simulated {i + 1}/{len(rows)} matches", flush=True)
+_WORKER: dict = {}
+
+
+def _single_thread(model) -> None:
+    """One model per process: stop each process's model from using every core."""
+    if getattr(model, "name", "") in ("lightgbm", "xgboost"):
+        model.est.set_params(n_jobs=1)
+
+
+def _init_worker(model, table, cols, n_sims, legal_balls) -> None:
+    from threadpoolctl import threadpool_limits
+    threadpool_limits(1)
+    _single_thread(model)
+    _WORKER.update(model=model, table=table, cols=cols, n_sims=n_sims, legal_balls=legal_balls)
+
+
+def _run_one(item):
+    i, setup = item
+    w = _WORKER
+    predict = lambda X: w["model"].predict(pd.DataFrame(X, columns=w["cols"]))  # noqa: E731
+    return simulate(setup, predict, w["table"], w["n_sims"], w["legal_balls"], seed=i)
+
+
+def simulate_setups(setups, model, table, cols, n_sims: int, legal_balls: int = 36,
+                    workers: int = 1) -> list[np.ndarray]:
+    """Simulate each setup; match i uses seed i, so any worker count gives the same output."""
+    out: list[np.ndarray] = []
+    if workers <= 1:
+        predict = lambda X: model.predict(pd.DataFrame(X, columns=cols))  # noqa: E731
+        items = (simulate(s, predict, table, n_sims, legal_balls, seed=i)
+                 for i, s in enumerate(setups))
+        for i, r in enumerate(items):
+            out.append(r)
+            if (i + 1) % 50 == 0:
+                print(f"  simulated {i + 1}/{len(setups)} matches", flush=True)
+        return out
+    from concurrent.futures import ProcessPoolExecutor
+    with ProcessPoolExecutor(max_workers=workers, initializer=_init_worker,
+                             initargs=(model, table, cols, n_sims, legal_balls)) as ex:
+        for i, r in enumerate(ex.map(_run_one, enumerate(setups), chunksize=2)):
+            out.append(r)
+            if (i + 1) % 50 == 0:
+                print(f"  simulated {i + 1}/{len(setups)} matches", flush=True)
     return out
+
+
+def simulate_matches(rows: pd.DataFrame, ctx: Context, model, table: pd.DataFrame,
+                     n_sims: int, legal_balls: int = 36, workers: int = 1) -> list[np.ndarray]:
+    setups = [match_setup(row, ctx) for row in rows.itertuples()]
+    return simulate_setups(setups, model, run_table(table), feature_columns(ctx.skill.levels),
+                           n_sims, legal_balls, workers)
