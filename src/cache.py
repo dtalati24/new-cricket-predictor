@@ -8,6 +8,7 @@ of them and the cache rebuilds; delete data/model/cache to force a rebuild.
 from __future__ import annotations
 
 import hashlib
+import os
 import pickle
 from pathlib import Path
 
@@ -18,9 +19,12 @@ CACHE_DIR = MODEL / "cache"
 
 def input_files() -> list[Path]:
     files = sorted((ROOT / "src" / "features").glob("*.py")) + sorted(
-        (ROOT / "src" / "skill").glob("*.py")) + [ROOT / "src" / "model" / "frame.py"]
-    files += sorted(PARSED.glob("*.parquet")) + [TICKS / "match_odds_markets.parquet", PLAYER_META_RDA]
-    for p in (ROOT / "data" / "raw" / "weather" / "hourly.parquet",
+        (ROOT / "src" / "skill").glob("*.py")) + [
+        ROOT / "src" / "model" / "frame.py", ROOT / "src" / "run_6over.py",
+        ROOT / "src" / "sim" / "setup.py", ROOT / "src" / "config.py"]
+    files += sorted(PARSED.glob("*.parquet")) + [PLAYER_META_RDA]
+    for p in (TICKS / "match_odds_markets.parquet",
+              ROOT / "data" / "raw" / "weather" / "hourly.parquet",
               ROOT / "data" / "raw" / "weather" / "venues.csv",
               ROOT / "src" / "features" / "venue_overrides.csv"):
         if p.exists():
@@ -47,11 +51,14 @@ def load_or_build(cutoff: str, columns: list[str], files: list[Path], build,
                   cache_dir: Path = CACHE_DIR):
     path = Path(cache_dir) / f"{cutoff}-{cache_key(cutoff, columns, files)[:12]}.pkl"
     if path.exists():
-        with path.open("rb") as fh:
-            return pickle.load(fh)
+        try:
+            with path.open("rb") as fh:
+                return pickle.load(fh)
+        except (EOFError, pickle.UnpicklingError):
+            path.unlink()
     obj = build()
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
+    tmp = path.with_suffix(f".{os.getpid()}.tmp")
     with tmp.open("wb") as fh:
         pickle.dump(obj, fh, protocol=5)
     tmp.replace(path)
