@@ -23,6 +23,24 @@ docs/gates.md measured numbers and the traps found in the data
 Market MAE on men's T20, 2025+ holdout: **10.48 runs at 6 overs, 26.96 at 20**.
 `src.market.baseline.comparison_bar("holdout")` reproduces it.
 
+## Checking the predicted spread (PIT)
+
+The simulator outputs a spread of possible 6-over scores, not one number. PIT
+(probability integral transform) checks whether that spread is honest:
+
+1. For each match, simulate 10,000 possible 6-over scores.
+2. When the real score is known, find the share of simulated scores below it
+   (e.g. 7,000 of 10,000 below a real 58 gives 70%). That share is the match's PIT.
+3. Repeat for every match.
+4. If the spread is honest, these shares are evenly spread from 0% to 100%.
+   A pile-up near 0% and 100% means the spread is too narrow (overconfident);
+   a pile-up near 100% alone means the model runs low.
+
+On the 764-match 2025+ holdout (logistic model, after calibration) the counts
+per 10% bucket were 71, 66, 77, 77, 75, 81, 87, 81, 81, 68: close to flat
+(Kolmogorov-Smirnov p = 0.48), and the 80% range held the real score 82% of
+the time.
+
 ## Rebuilding the tables
 
 ```bash
