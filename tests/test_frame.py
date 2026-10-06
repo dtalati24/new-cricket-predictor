@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from src.features.context import CONTEXT
 from src.features.outcomes import CLASSES, label_outcomes
 from src.model.frame import (
     FORM, SITUATION, build_frame, feature_columns, importance_groups, situation,
@@ -49,8 +50,9 @@ def test_over_rolls_after_six_legal_balls():
     assert s.ball_in_over.tolist() == [0, 1, 2, 3, 4, 5, 0, 1]
 
 
-def test_feature_columns_count_with_seven_levels():
-    assert len(feature_columns(LEVELS)) == 7 * 11 + 11 + len(FORM) + len(SITUATION)
+def test_feature_columns_count_for_all_levels():
+    assert len(feature_columns(LEVELS)) == (
+        len(LEVELS) * 11 + 11 + len(FORM) + len(CONTEXT) + len(SITUATION))
 
 
 def test_hint_rows_sum_to_one():
@@ -73,7 +75,7 @@ def test_importance_groups_cover_every_feature_once_plus_all_skill():
     g = importance_groups(LEVELS)
     singles = [c for name, cols in g.items() if name != "all_skill" for c in cols]
     assert sorted(singles) == sorted(feature_columns(LEVELS))
-    assert len(g["all_skill"]) == 7 * 11 + 11
+    assert len(g["all_skill"]) == len(LEVELS) * 11 + 11
 
 
 def test_situation_resets_at_each_match():
@@ -118,7 +120,8 @@ def test_build_frame_on_two_matches():
     bowl_form = pd.DataFrame({"player_id": ["w", "w"],
                               "date": pd.to_datetime(["2020-02-01", "2020-03-01"]),
                               "bowl_form_econ": [7.0, 99.0], "bowl_form_wkt": [0.2, 0.9]})
-    f = build_frame(balls, skill, bat_form, bowl_form)
+    context = pd.DataFrame(0.0, index=["m1", "m2"], columns=CONTEXT)
+    f = build_frame(balls, skill, bat_form, bowl_form, context)
     assert len(f) == 8 and f.match_id.tolist() == ["m1"] * 4 + ["m2"] * 4, "innings 1 only"
     assert list(f.columns) == feature_columns(levels) + ["y", "date", "match_id"]
     assert f.y.tolist() == balls[balls.innings_num == 1].outcome.cat.codes.tolist()

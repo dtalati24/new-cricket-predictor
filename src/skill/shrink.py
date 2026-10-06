@@ -8,6 +8,7 @@ likelihood of the training-slice counts given the parent. Levels:
     league -> batter -> batter x bowler_type
     league -> bowler -> bowler x batting_hand
     league -> venue
+    league -> competition
     batter x venue (parent batter), bowler x venue (parent bowler)
 """
 from __future__ import annotations
@@ -68,6 +69,7 @@ LEVELS = (
     Level("batter", ("batter_id",), None),
     Level("bowler", ("bowler_id",), None),
     Level("venue", ("venue_key",), None),
+    Level("competition", ("competition_key",), None),
     Level("batter_x_bowlertype", ("batter_id", "bowler_type"), "batter"),
     Level("bowler_x_battinghand", ("bowler_id", "batting_hand"), "bowler"),
     Level("batter_x_venue", ("batter_id", "venue_key"), "batter"),

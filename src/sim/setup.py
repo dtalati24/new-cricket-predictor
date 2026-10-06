@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from src.features.asof import as_of
+from src.features.context import CONTEXT
 from src.model.frame import feature_columns, form_features, skill_features, static_columns
 from src.sim.simulate import MatchSetup, run_table, simulate
 from src.skill.shrink import SkillModel
@@ -26,6 +27,7 @@ class Context:
     bat_pos: pd.DataFrame
     pp: pd.DataFrame
     xi: pd.DataFrame
+    context: pd.DataFrame
 
 
 def check_xi(rows: pd.DataFrame, xi: pd.DataFrame) -> None:
@@ -52,8 +54,10 @@ def match_setup(row, ctx: Context) -> MatchSetup:
     pairs["batting_hand"] = pairs.batter_id.map(s.batting_hand).fillna("unknown")
     pairs["venue_key"] = row.venue_key
     pairs["date"] = pd.Timestamp(row.date)
+    crow = ctx.context.loc[row.match_id, CONTEXT].to_numpy(np.float32)
+    cblock = pd.DataFrame(np.tile(crow, (len(pairs), 1)), index=pairs.index, columns=CONTEXT)
     static = pd.concat([skill_features(ctx.skill, pairs),
-                        form_features(pairs, ctx.bat_form, ctx.bowl_form)], axis=1)
+                        form_features(pairs, ctx.bat_form, ctx.bowl_form), cblock], axis=1)
     static = static[static_columns(ctx.skill.levels)].to_numpy(np.float32)
     return MatchSetup(batters, bowlers, w + WEIGHT_FLOOR,
                       static.reshape(len(batters), len(bowlers), -1))

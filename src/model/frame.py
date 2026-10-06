@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from src.features.asof import as_of
+from src.features.context import CONTEXT
 from src.features.outcomes import CLASSES, NOT_LEGAL, is_wicket
 from src.skill.shrink import Level, SkillModel, estimates
 
@@ -23,7 +24,7 @@ def skill_columns(levels: tuple[Level, ...]) -> list[str]:
 
 
 def static_columns(levels: tuple[Level, ...]) -> list[str]:
-    return skill_columns(levels) + FORM
+    return skill_columns(levels) + FORM + CONTEXT
 
 
 def feature_columns(levels: tuple[Level, ...]) -> list[str]:
@@ -68,11 +69,13 @@ def situation(b: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_frame(balls: pd.DataFrame, skill: SkillModel, bat_form: pd.DataFrame,
-                bowl_form: pd.DataFrame) -> pd.DataFrame:
-    """`balls` must be annotated (bowler_type, batting_hand)."""
+                bowl_form: pd.DataFrame, context: pd.DataFrame) -> pd.DataFrame:
+    """`balls` must be annotated (bowler_type, batting_hand). `context`: index match_id."""
     b = balls[balls.innings_num == 1]
+    ctx = pd.DataFrame(context.reindex(b.match_id.to_numpy())[CONTEXT].to_numpy(np.float32),
+                       index=b.index, columns=CONTEXT)
     frame = pd.concat([skill_features(skill, b), form_features(b, bat_form, bowl_form),
-                       situation(b)], axis=1)[feature_columns(skill.levels)]
+                       ctx, situation(b)], axis=1)[feature_columns(skill.levels)]
     frame["y"] = b.outcome.cat.codes.astype(np.int8)
     frame["date"] = b.date
     frame["match_id"] = b.match_id
@@ -82,6 +85,6 @@ def build_frame(balls: pd.DataFrame, skill: SkillModel, bat_form: pd.DataFrame,
 def importance_groups(levels: tuple[Level, ...]) -> dict[str, list[str]]:
     g = {lv.name: [f"{lv.name}__{c}" for c in CLASSES] for lv in levels}
     g["hint"] = [f"hint__{c}" for c in CLASSES]
-    g.update({c: [c] for c in FORM + SITUATION})
+    g.update({c: [c] for c in FORM + CONTEXT + SITUATION})
     g["all_skill"] = skill_columns(levels)
     return g

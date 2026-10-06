@@ -85,10 +85,12 @@ def test_fit_runs_the_chain_and_orders_k_sensibly():
 
 def test_levels_are_the_spec_hierarchy():
     by = {lv.name: lv for lv in LEVELS}
-    assert set(by) == {"batter", "bowler", "venue", "batter_x_bowlertype", "bowler_x_battinghand",
+    assert set(by) == {"batter", "bowler", "venue", "competition", "batter_x_bowlertype", "bowler_x_battinghand",
                        "batter_x_venue", "bowler_x_venue"}
     assert by["venue"].parent is None
     assert by["venue"].group_cols == ("venue_key",)
+    assert by["competition"].parent is None
+    assert by["competition"].group_cols == ("competition_key",)
     assert by["batter_x_venue"].parent == "batter"
     assert by["bowler_x_venue"].parent == "bowler"
 

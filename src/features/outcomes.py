@@ -22,6 +22,24 @@ NOT_OUT_KINDS = ("retired hurt", "retired not out")
 AMBIGUOUS_VENUES = ("County Ground", "Gymkhana Club Ground", "National Stadium", "Queen's Park")
 
 
+# Sponsor renames of the same competition. Checked against the 40 most frequent
+# event names (2026-10-06); extend when a new rename appears.
+COMPETITION_RENAMES = {
+    "NatWest T20 Blast": "T20 Blast",
+    "Vitality Blast": "T20 Blast",
+    "Vitality Blast Men": "T20 Blast",
+    "ICC World Twenty20": "ICC Men's T20 World Cup",
+    "World T20": "ICC Men's T20 World Cup",
+    "ICC World Twenty20 Qualifier": "ICC Men's T20 World Cup Qualifier",
+    "Ram Slam T20 Challenge": "CSA T20 Challenge",
+    "MiWAY T20 Challenge": "CSA T20 Challenge",
+}
+
+
+def competition_key(event_name: pd.Series) -> pd.Series:
+    return event_name.replace(COMPETITION_RENAMES).fillna("unknown").astype(str)
+
+
 def venue_key(venue: pd.Series, city: pd.Series) -> pd.Series:
     name = venue.str.split(",").str[0].str.strip()
     return name.where(~name.isin(AMBIGUOUS_VENUES),
@@ -78,9 +96,10 @@ def load_balls() -> pd.DataFrame:
                         filters=[("match_id", "in", m.match_id.tolist())])
     d = d.merge(inn[["match_id", "innings_num", "batting_team", "bowling_team"]],
                 on=["match_id", "innings_num"])
-    d = d.merge(m[["match_id", "date", "venue", "city"]], on="match_id")
+    d = d.merge(m[["match_id", "date", "venue", "city", "event_name"]], on="match_id")
     d["date"] = pd.to_datetime(d["date"])
     d["venue_key"] = venue_key(d["venue"], d["city"])
+    d["competition_key"] = competition_key(d["event_name"])
     d["outcome"] = label_outcomes(d)
     d = d.sort_values(["date", "match_id", "innings_num", "over", "ball_seq"], kind="stable")
     return d.reset_index(drop=True)

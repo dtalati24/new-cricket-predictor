@@ -20,8 +20,10 @@ import pandas as pd
 
 from src.bet.backtest import backtest, decide, pnl
 from src.config import DEV_END, PARSED, REPORTS_DIR, TRAIN_END, ensure_dirs
+from src.features.context import match_context
 from src.features.form import batter_form, bowler_form
-from src.features.outcomes import load_balls, log_loss, outcome_table, venue_key
+from src.features.outcomes import (
+    competition_key, load_balls, log_loss, mens_t20_matches, outcome_table, venue_key)
 from src.features.players import (
     annotate, batting_order_history, load_xi, player_styles, powerplay_history)
 from src.market.baseline import comparison_bar, comparison_set
@@ -45,6 +47,7 @@ def market_rows(split: str, start: str | None = None) -> pd.DataFrame:
     if start:
         r = r[r.date >= start]
     r["venue_key"] = venue_key(r.venue, r.city)
+    r["competition_key"] = competition_key(r.event_name)
     return r.sort_values("date", kind="stable").reset_index(drop=True)
 
 
@@ -79,10 +82,12 @@ def prepare(cutoff: str):
     styles = player_styles()
     balls = annotate(load_balls(), styles)
     xi = load_xi(balls)
+    context = match_context(balls, mens_t20_matches())
     ctx = Context(skill=fit_skill(balls, cutoff), styles=styles,
                   bat_form=batter_form(balls), bowl_form=bowler_form(balls),
-                  bat_pos=batting_order_history(balls), pp=powerplay_history(balls, xi), xi=xi)
-    frame = build_frame(balls, ctx.skill, ctx.bat_form, ctx.bowl_form)
+                  bat_pos=batting_order_history(balls), pp=powerplay_history(balls, xi), xi=xi,
+                  context=context)
+    frame = build_frame(balls, ctx.skill, ctx.bat_form, ctx.bowl_form, context)
     table = outcome_table(balls[balls.date < cutoff])
     return balls, ctx, frame, table
 
