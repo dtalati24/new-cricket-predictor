@@ -45,7 +45,7 @@ def test_match_setup_builds_every_level_and_broadcasts_context():
     xi = pd.DataFrame({"match_id": "m", "date": pd.Timestamp("2024-02-01"),
                        "team": ["A", "A", "B", "B"], "player_id": ["a1", "a2", "b1", "b2"],
                        "position": [1, 2, 1, 2]})
-    context = pd.DataFrame([[1.0, 2024.5]], index=["m"], columns=CONTEXT).astype(np.float32)
+    context = pd.DataFrame([[1.0, 2024.5, *range(2, len(CONTEXT))]], index=["m"], columns=CONTEXT).astype(np.float32)
     ctx = Context(skill=skill, styles=styles,
                   bat_form=form(["bat_form_sr", "bat_form_out"]),
                   bowl_form=form(["bowl_form_econ", "bowl_form_wkt"]),

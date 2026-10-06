@@ -17,10 +17,11 @@ NOT_BOWLER_WICKETS = ("run out", "retired hurt", "retired not out", "retired out
                       "obstructing the field")
 
 
-def post_match_ewm(per: pd.DataFrame, key: str, cols: list[str]) -> pd.DataFrame:
+def post_match_ewm(per: pd.DataFrame, key: str, cols: list[str],
+                   halflife: float = HALFLIFE) -> pd.DataFrame:
     """`per` has one row per (key, date). EWM over that key's dates, row included."""
     per = per.sort_values([key, "date"], kind="stable").reset_index(drop=True)
-    ew = per.groupby(key)[cols].ewm(halflife=HALFLIFE).mean().reset_index(level=0, drop=True)
+    ew = per.groupby(key)[cols].ewm(halflife=halflife).mean().reset_index(level=0, drop=True)
     per[cols] = ew.sort_index()
     return per
 
