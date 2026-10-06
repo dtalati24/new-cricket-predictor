@@ -27,9 +27,9 @@ builds. All history-based features are point-in-time: read with
 
 Known at the toss, no history needed.
 
-- `bat_won_toss` — 1 if the batting-first team won the toss.
-- `chose_to_bat` — 1 if the toss winner chose to bat (`toss_decision == "bat"`).
-  Together they separate "chose to bat first" from "was put in".
+- `chose_to_bat` — 1 if the batting-first team chose to bat (`toss_decision == "bat"`); 0 if it was put in.
+  There is no separate "won the toss" column: the side batting first won the toss exactly when the
+  winner chose to bat, so it would be identical (checked: 0 differences in 10,534 matches).
 
 ### 1.2 Scoring trend and competition
 

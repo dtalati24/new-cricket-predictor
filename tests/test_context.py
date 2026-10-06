@@ -24,8 +24,8 @@ def test_toss_flags_separate_chose_to_bat_from_put_in():
     matches = pd.DataFrame({"match_id": ["m1", "m2"], "toss_winner": ["A", "D"],
                             "toss_decision": ["bat", "field"]})
     t = toss_and_season(first_innings(_balls()), matches)
-    assert t.loc["m1", "bat_won_toss"] == 1.0 and t.loc["m1", "chose_to_bat"] == 1.0
-    assert t.loc["m2", "bat_won_toss"] == 0.0 and t.loc["m2", "chose_to_bat"] == 0.0
+    assert t.loc["m1", "chose_to_bat"] == 1.0
+    assert t.loc["m2", "chose_to_bat"] == 0.0
 
 
 def test_season_is_year_plus_fraction():
@@ -43,4 +43,4 @@ def test_competition_key_merges_sponsor_renames():
 
 
 def test_context_starts_with_toss_and_season():
-    assert CONTEXT[:3] == ["bat_won_toss", "chose_to_bat", "season"]
+    assert CONTEXT[:2] == ["chose_to_bat", "season"]

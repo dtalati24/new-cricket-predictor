@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-TOSS_SEASON = ["bat_won_toss", "chose_to_bat", "season"]
+TOSS_SEASON = ["chose_to_bat", "season"]
 CONTEXT = TOSS_SEASON
 
 
@@ -24,7 +24,7 @@ def toss_and_season(first: pd.DataFrame, matches: pd.DataFrame) -> pd.DataFrame:
     m = matches.set_index("match_id").reindex(first.index)
     d = pd.to_datetime(first.date)
     return pd.DataFrame({
-        "bat_won_toss": (m.toss_winner == first.batting_team).astype(float),
+        # 1 if the side batting first chose to; 0 if it was put in
         "chose_to_bat": (m.toss_decision == "bat").astype(float),
         "season": d.dt.year + (d.dt.dayofyear - 1) / 366,
     }, index=first.index)
