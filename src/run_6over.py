@@ -26,6 +26,7 @@ from src.features.outcomes import (
     competition_key, load_balls, log_loss, mens_t20_matches, outcome_table, venue_key)
 from src.features.players import (
     annotate, batting_order_history, load_xi, player_styles, powerplay_history)
+from src.features.weather import load_match_weather
 from src.market.baseline import comparison_bar, comparison_set
 from src.model.ballmodel import MODELS, fit as fit_model, permutation_importance
 from src.model.frame import build_frame, feature_columns, importance_groups
@@ -82,7 +83,7 @@ def prepare(cutoff: str):
     styles = player_styles()
     balls = annotate(load_balls(), styles)
     xi = load_xi(balls)
-    context = match_context(balls, mens_t20_matches())
+    context = match_context(balls, mens_t20_matches(), load_match_weather(balls))
     ctx = Context(skill=fit_skill(balls, cutoff), styles=styles,
                   bat_form=batter_form(balls), bowl_form=bowler_form(balls),
                   bat_pos=batting_order_history(balls), pp=powerplay_history(balls, xi), xi=xi,

@@ -13,11 +13,12 @@ import pandas as pd
 from src.features.asof import as_of
 from src.features.form import post_match_ewm
 from src.features.outcomes import NOT_LEGAL, is_wicket
+from src.features.weather import WEATHER
 
 TOSS_SEASON = ["chose_to_bat", "season"]
 HISTORY = ["league_pp_recent", "comp_pp_recent", "venue_pp_recent", "venue_pp_n",
            "team_bat_pp", "opp_bat_pp", "opp_bowl_pp_conceded"]
-CONTEXT = TOSS_SEASON + HISTORY
+CONTEXT = TOSS_SEASON + HISTORY + WEATHER
 
 PP_LEGAL_BALLS = 36
 LEAGUE_WINDOW_DAYS = 90
@@ -99,7 +100,12 @@ def history_features(balls: pd.DataFrame, first: pd.DataFrame) -> pd.DataFrame:
     return out[HISTORY]
 
 
-def match_context(balls: pd.DataFrame, matches: pd.DataFrame) -> pd.DataFrame:
+def match_context(balls: pd.DataFrame, matches: pd.DataFrame,
+                  weather: pd.DataFrame | None = None) -> pd.DataFrame:
     first = first_innings(balls)
     out = toss_and_season(first, matches).join(history_features(balls, first))
+    if weather is None:
+        out[WEATHER] = np.nan
+    else:
+        out = out.join(weather.reindex(out.index)[WEATHER])
     return out[CONTEXT].astype(np.float32)
