@@ -1,0 +1,80 @@
+name: walk-forward
+
+on:
+  workflow_dispatch:
+    inputs:
+      years:
+        description: "Test years, comma-separated"
+        default: "2023,2024,2025,2026"
+        required: true
+      n_sims_test:
+        description: "Simulations per test match"
+        default: "10000"
+        required: true
+      data_tag:
+        description: "Release tag holding data_bundle.tar.gz"
+        default: "data-v1"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  years:
+    runs-on: ubuntu-latest
+    outputs:
+      list: ${{ steps.y.outputs.list }}
+    steps:
+      - id: y
+        run: echo "list=[${{ inputs.years }}]" >> "$GITHUB_OUTPUT"
+
+  fold:
+    needs: years
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      matrix:
+        year: ${{ fromJSON(needs.years.outputs.list) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Fetch data bundle (private release asset)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "${{ inputs.data_tag }}" --pattern data_bundle.tar.gz
+          tar -xzf data_bundle.tar.gz
+      - name: Run fold
+        run: python -u -m src.walkforward --year ${{ matrix.year }} --workers 2 --n-sims-test ${{ inputs.n_sims_test }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: walkforward-${{ matrix.year }}
+          path: data/reports/walkforward/
+
+  summary:
+    needs: fold
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: walkforward-*
+          merge-multiple: true
+          path: data/reports/walkforward/
+      - run: python -m src.walkforward --summary
+      - uses: actions/upload-artifact@v4
+        with:
+          name: walkforward-summary
+          path: data/reports/walkforward/summary.json

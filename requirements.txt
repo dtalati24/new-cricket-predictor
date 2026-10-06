@@ -12,7 +12,7 @@ scikit-learn>=1.4
 
 # Per-ball model bake-off (Phase 2): three algorithms are compared, so both
 # boosting libraries are needed. Multinomial logistic comes from scikit-learn.
-lightgbm>=4.0
+lightgbm>=4.7
 xgboost>=2.0
 
 # Reads the cricketdata package's player_meta.rda for bowling and batting
