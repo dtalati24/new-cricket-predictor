@@ -23,6 +23,16 @@ docs/gates.md measured numbers and the traps found in the data
 Market MAE on men's T20, 2025+ holdout: **10.48 runs at 6 overs, 26.96 at 20**.
 `src.market.baseline.comparison_bar("holdout")` reproduces it.
 
+## Results: 6-over holdout (2025+, 764 matches, scored once)
+
+Market MAE 10.48 runs; beating it needs a gain of more than 0.85 runs.
+Logistic (chosen in advance on 2024): MAE 10.68, backtest +0.3% ROI over 692 bets.
+LightGBM (comparison): MAE 10.49, +1.3% ROI over 695 bets.
+XGBoost (comparison): MAE 10.57, +0.0% ROI over 698 bets.
+All three are calibrated (80% interval covers ~81% of outcomes, PIT flat) but
+none beats the market; the ROIs are within one standard error (~±3.7%) of zero.
+Details: `data/reports/6over_final_{model}.json`.
+
 ## Checking the predicted spread (PIT)
 
 The simulator outputs a spread of possible 6-over scores, not one number. PIT
