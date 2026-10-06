@@ -64,14 +64,18 @@ def log_loss(probs: np.ndarray, codes) -> float:
     return float(-np.log(p).mean())
 
 
+def mens_t20_matches() -> pd.DataFrame:
+    m = pd.read_parquet(PARSED / "matches.parquet")
+    return m[m.match_type.isin(["T20", "IT20"]) & (m.gender == "male") & (m.balls_per_over == 6)]
+
+
 def load_balls() -> pd.DataFrame:
     """Men's T20/IT20, 6-ball overs, innings 1-2, in delivery order, labelled."""
-    m = pd.read_parquet(PARSED / "matches.parquet")
-    m = m[m.match_type.isin(["T20", "IT20"]) & (m.gender == "male") & (m.balls_per_over == 6)]
+    m = mens_t20_matches()
     inn = pd.read_parquet(PARSED / "innings.parquet")
     inn = inn[inn.innings_num.isin([1, 2]) & ~inn.is_super_over]
-    d = pd.read_parquet(PARSED / "deliveries.parquet")
-    d = d[d.match_id.isin(set(m.match_id))]
+    d = pd.read_parquet(PARSED / "deliveries.parquet",
+                        filters=[("match_id", "in", m.match_id.tolist())])
     d = d.merge(inn[["match_id", "innings_num", "batting_team", "bowling_team"]],
                 on=["match_id", "innings_num"])
     d = d.merge(m[["match_id", "date", "venue", "city"]], on="match_id")
