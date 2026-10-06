@@ -1,7 +1,6 @@
 # tests/test_speed.py
 import numpy as np
 import pandas as pd
-import pytest
 
 import src.sim.simulate as simmod
 from src.features.outcomes import CLASSES
@@ -61,3 +60,35 @@ def test_parallel_equals_serial():
     parallel = simulate_setups(setups, FakeModel(), table, COLS, n_sims=300, workers=2)
     for s, p in zip(serial, parallel):
         np.testing.assert_array_equal(s, p)
+
+
+class NanModel(FakeModel):
+    """FakeModel for a batch whose first column is NaN (zeroed for the maths only)."""
+
+    def predict(self, X):
+        return super().predict(X.fillna(0.0))
+
+
+def test_nan_column_still_dedupes_with_identical_results(monkeypatch):
+    setups, table = [_setup(0.0)], _table()
+    for s in setups:
+        s.static[:, :, 0] = np.nan
+    m1 = NanModel()
+    monkeypatch.setattr(simmod, "DEDUPE", True)
+    a = simulate_setups(setups, m1, table, COLS, n_sims=500)
+    m2 = NanModel()
+    monkeypatch.setattr(simmod, "DEDUPE", False)
+    b = simulate_setups(setups, m2, table, COLS, n_sims=500)
+    np.testing.assert_array_equal(a[0], b[0])
+    assert m1.rows_seen < m2.rows_seen
+
+
+def test_logistic_skips_dedupe(monkeypatch):
+    m = FakeModel()
+    m.name = "logistic"
+    monkeypatch.setattr(simmod, "DEDUPE", True)
+    simulate_setups([_setup(0.0)], m, _table(), COLS, n_sims=200)
+    m2 = FakeModel()
+    monkeypatch.setattr(simmod, "DEDUPE", False)
+    simulate_setups([_setup(0.0)], m2, _table(), COLS, n_sims=200)
+    assert m.rows_seen == m2.rows_seen

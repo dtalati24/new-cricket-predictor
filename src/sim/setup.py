@@ -68,6 +68,11 @@ def _single_thread(model) -> None:
         model.est.set_params(n_jobs=1)
 
 
+def _dedupe(model) -> bool | None:
+    """Logistic predicts faster than the dedupe costs; None leaves the module flag in charge."""
+    return False if getattr(model, "name", "") == "logistic" else None
+
+
 def _init_worker(model, table, cols, n_sims, legal_balls) -> None:
     from threadpoolctl import threadpool_limits
     threadpool_limits(1)
@@ -79,16 +84,20 @@ def _run_one(item):
     i, setup = item
     w = _WORKER
     predict = lambda X: w["model"].predict(pd.DataFrame(X, columns=w["cols"]))  # noqa: E731
-    return simulate(setup, predict, w["table"], w["n_sims"], w["legal_balls"], seed=i)
+    return simulate(setup, predict, w["table"], w["n_sims"], w["legal_balls"], seed=i,
+                    dedupe=_dedupe(w["model"]))
 
 
 def simulate_setups(setups, model, table, cols, n_sims: int, legal_balls: int = 36,
                     workers: int = 1) -> list[np.ndarray]:
     """Simulate each setup; match i uses seed i, so any worker count gives the same output."""
     out: list[np.ndarray] = []
+    if workers > 1:
+        import threadpoolctl  # noqa: F401  # fail here, not as a BrokenProcessPool
     if workers <= 1:
         predict = lambda X: model.predict(pd.DataFrame(X, columns=cols))  # noqa: E731
-        items = (simulate(s, predict, table, n_sims, legal_balls, seed=i)
+        items = (simulate(s, predict, table, n_sims, legal_balls, seed=i,
+                          dedupe=_dedupe(model))
                  for i, s in enumerate(setups))
         for i, r in enumerate(items):
             out.append(r)

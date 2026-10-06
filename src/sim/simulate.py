@@ -77,7 +77,9 @@ class MatchSetup:
 
 
 def simulate(setup: MatchSetup, predict, table: RunTable, n_sims: int = 10_000,
-             legal_balls: int = 36, seed: int = 0) -> np.ndarray:
+             legal_balls: int = 36, seed: int = 0,
+             dedupe: bool | None = None) -> np.ndarray:
+    dedupe = DEDUPE if dedupe is None else dedupe
     rng = np.random.default_rng(seed)
     n_bat = len(setup.batters)
     max_wkts = min(10, n_bat - 1)
@@ -98,9 +100,12 @@ def simulate(setup: MatchSetup, predict, table: RunTable, n_sims: int = 10_000,
         bat = striker[act]
         X = np.column_stack([setup.static[bat, plan[act, over]], over, legal[act] % 6,
                              wkts[act], runs[act], faced[act, bat], free_hit[act]])
-        if DEDUPE:
-            uniq, inv = np.unique(X, axis=0, return_inverse=True)
-            probs = predict(uniq)[inv.reshape(-1)]
+        if dedupe:
+            # Byte-view unique: far faster than axis=0 and also merges rows holding NaN.
+            Xc = np.ascontiguousarray(X)
+            v = Xc.view(np.dtype((np.void, Xc.itemsize * Xc.shape[1]))).ravel()
+            _, idx, inv = np.unique(v, return_index=True, return_inverse=True)
+            probs = predict(Xc[idx])[inv.reshape(-1)]
         else:
             probs = predict(X)
         cls = sample_rows(probs, rng)
