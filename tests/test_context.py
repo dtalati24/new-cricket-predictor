@@ -38,8 +38,13 @@ def test_season_is_year_plus_fraction():
 
 def test_competition_key_merges_sponsor_renames():
     k = competition_key(pd.Series(["NatWest T20 Blast", "Vitality Blast", "Vitality Blast Men",
-                                   "Indian Premier League", None]))
-    assert k.tolist() == ["T20 Blast", "T20 Blast", "T20 Blast", "Indian Premier League", "unknown"]
+                                   "Indian Premier League", None, "World T20",
+                                   "ICC World Twenty20", "ICC Men's T20 World Cup",
+                                   "ICC World Twenty20 Qualifier", "Ram Slam T20 Challenge",
+                                   "MiWAY T20 Challenge", "CSA T20 Challenge"]))
+    wc, wcq, csa = "ICC Men's T20 World Cup", "ICC Men's T20 World Cup Qualifier", "CSA T20 Challenge"
+    assert k.tolist() == ["T20 Blast", "T20 Blast", "T20 Blast", "Indian Premier League", "unknown",
+                          wc, wc, wc, wcq, csa, csa, csa]
 
 
 def test_context_starts_with_toss_and_season():
