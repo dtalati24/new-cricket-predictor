@@ -19,20 +19,20 @@ import pandas as pd
 
 from src.bet.backtest import backtest
 from src.cache import input_files, load_or_build
-from src.config import REPORTS_DIR
+from src.config import PARSED, REPORTS_DIR
 from src.features.outcomes import competition_key, venue_key
 from src.market.baseline import comparison_set
 from src.model.ballmodel import MODELS, fit as fit_model
 from src.model.frame import feature_columns
 from src.run_6over import SIX, choose_model, per_match, prepare
 from src.sim.calibrate import apply, fit_calibration, summary
-from src.sim.setup import simulate_matches
+from src.sim.setup import check_xi, simulate_matches
 from src.skill.shrink import LEVELS
 
 YEARS = (2023, 2024, 2025, 2026)
 OUT = REPORTS_DIR / "walkforward"
 SMOKE_TRAIN_ROWS = 200_000
-SMOKE_MATCHES = 5
+SMOKE_MATCHES = 30
 
 
 def year_rows(year: int) -> pd.DataFrame:
@@ -54,10 +54,29 @@ def prepare_cached(cutoff: str):
 
 def _fit_all(frame, cutoff, models, cols, smoke):
     tr = frame.date < cutoff
-    train = frame.loc[tr]
+    train = frame.loc[tr, [*cols, "y", "date"]]
     if smoke:
         train = train.tail(SMOKE_TRAIN_ROWS)
     return {n: fit_model(n, train, train.y.to_numpy(), train.date, cols) for n in models}
+
+
+def _score(name, report, cal, rows, cols, test_cut, n_test, workers, smoke, out_dir):
+    """Fit one model on < Y, simulate Y, write its parquet and the report. One model in memory at a time."""
+    year = report["year"]
+    ctx, frame, table = prepare_cached(test_cut)
+    model = _fit_all(frame, test_cut, [name], cols, smoke)[name]
+    del frame
+    gc.collect()
+    ys = rows.runs_at_6ov.to_numpy(float)
+    lines = rows.pre_match_line.to_numpy(float)
+    raw = simulate_matches(rows, ctx, model, table, n_test, workers=workers)
+    sims = [apply(cal, s) for s in raw]
+    per_match(rows, raw, sims).to_parquet(out_dir / f"{year}_{name}_matches.parquet")
+    report["test"][name] = {"role": "chosen" if name == report["chosen"] else "comparison",
+                            "calibration": cal.__dict__, "raw": summary(raw, ys),
+                            "calibrated": summary(sims, ys), "backtest": backtest(sims, lines, ys)}
+    (out_dir / f"{year}.json").write_text(json.dumps(report, indent=2, default=float))
+    print(year, "test", name, report["test"][name]["calibrated"], flush=True)
 
 
 def run_fold(year: int, workers: int = 4, n_val: int = 2000, n_test: int = 10000,
@@ -69,6 +88,7 @@ def run_fold(year: int, workers: int = 4, n_val: int = 2000, n_test: int = 10000
     val_rows, test_rows = year_rows(year - 1), year_rows(year)
     if smoke:
         val_rows, test_rows = val_rows.head(SMOKE_MATCHES), test_rows.head(SMOKE_MATCHES)
+    check_xi(pd.concat([val_rows, test_rows]), pd.read_parquet(PARSED / "playing_xi.parquet"))
 
     # Phase 1: fit on < Y-1, simulate Y-1, calibrate each model, choose one.
     ctx, frame, table = prepare_cached(val_cut)
@@ -93,27 +113,24 @@ def run_fold(year: int, workers: int = 4, n_val: int = 2000, n_test: int = 10000
     chosen = choose_model(val)
     del ctx, fitted
     gc.collect()
-
-    # Phase 2: refit on < Y, simulate Y, apply each model's Y-1 calibration.
-    ctx, frame, table = prepare_cached(test_cut)
-    fitted = _fit_all(frame, test_cut, [n for n in models if n in cals], cols, smoke)
-    del frame
-    gc.collect()
-    ys = test_rows.runs_at_6ov.to_numpy(float)
-    lines = test_rows.pre_match_line.to_numpy(float)
     report = {"year": year, "chosen": chosen, "smoke": smoke, "n_val_sims": n_val,
               "n_test_sims": n_test, "n_val_matches": len(val_rows),
-              "n_test_matches": len(test_rows),
-              "market_mae": float(np.mean(np.abs(lines - ys))), "val": val, "test": {}}
-    for n in [chosen] + [k for k in fitted if k != chosen]:
-        raw = simulate_matches(test_rows, ctx, fitted[n], table, n_test, workers=workers)
-        sims = [apply(cals[n], s) for s in raw]
-        per_match(test_rows, raw, sims).to_parquet(out_dir / f"{year}_{n}_matches.parquet")
-        report["test"][n] = {"role": "chosen" if n == chosen else "comparison",
-                             "calibration": cals[n].__dict__, "raw": summary(raw, ys),
-                             "calibrated": summary(sims, ys), "backtest": backtest(sims, lines, ys)}
-        (out_dir / f"{year}.json").write_text(json.dumps(report, indent=2, default=float))
-        print(year, "test", n, report["test"][n]["calibrated"], flush=True)
+              "n_test_matches": len(test_rows), "val": val, "test": {}}
+    (out_dir / f"{year}.json").write_text(json.dumps(report, indent=2, default=float))
+
+    # Phase 2: refit on < Y, simulate Y, apply each model's Y-1 calibration. The chosen
+    # model first; comparisons are best-effort, each in a fresh load so memory stays flat.
+    lines, ys = test_rows.pre_match_line.to_numpy(float), test_rows.runs_at_6ov.to_numpy(float)
+    report["market_mae"] = float(np.mean(np.abs(lines - ys)))
+    args = (test_rows, cols, test_cut, n_test, workers, smoke, out_dir)
+    _score(chosen, report, cals[chosen], *args)
+    for n in [k for k in cals if k != chosen]:
+        try:
+            _score(n, report, cals[n], *args)
+        except Exception as err:
+            report["test"][n] = {"role": "comparison", "error": repr(err)}
+            (out_dir / f"{year}.json").write_text(json.dumps(report, indent=2, default=float))
+            print(year, "test", n, "FAILED", repr(err), flush=True)
     return report
 
 
