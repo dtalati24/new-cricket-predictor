@@ -11,6 +11,10 @@ on:
         description: "Simulations per test match"
         default: "10000"
         required: true
+      feature_sets:
+        description: "Feature sets, comma-separated: full, base (A/B comparison)"
+        default: "full"
+        required: true
       models:
         description: "Models to fit and score, comma-separated"
         default: "logistic,lightgbm,xgboost"
@@ -28,9 +32,12 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       list: ${{ steps.y.outputs.list }}
+      sets: ${{ steps.y.outputs.sets }}
     steps:
       - id: y
-        run: echo "list=[${{ inputs.years }}]" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "list=[${{ inputs.years }}]" >> "$GITHUB_OUTPUT"
+          echo "sets=[\"$(echo '${{ inputs.feature_sets }}' | sed 's/ //g; s/,/","/g')\"]" >> "$GITHUB_OUTPUT"
 
   fold:
     needs: years
@@ -40,6 +47,7 @@ jobs:
       fail-fast: false
       matrix:
         year: ${{ fromJSON(needs.years.outputs.list) }}
+        feature_set: ${{ fromJSON(needs.years.outputs.sets) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -55,11 +63,11 @@ jobs:
           tar -xzf data_bundle.tar.gz
       - name: Run fold
         timeout-minutes: 340
-        run: python -u -m src.walkforward --year ${{ matrix.year }} --workers 2 --n-sims-test ${{ inputs.n_sims_test }} --models ${{ inputs.models }}
+        run: python -u -m src.walkforward --year ${{ matrix.year }} --workers 2 --n-sims-test ${{ inputs.n_sims_test }} --models ${{ inputs.models }} --feature-set ${{ matrix.feature_set }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: walkforward-${{ matrix.year }}
+          name: walkforward-${{ matrix.year }}-${{ matrix.feature_set }}
           path: data/reports/walkforward/
 
   summary:
@@ -78,8 +86,13 @@ jobs:
           pattern: walkforward-*
           merge-multiple: true
           path: data/reports/walkforward/
-      - run: python -m src.walkforward --summary
+      - run: |
+          if ls data/reports/walkforward/*.json >/dev/null 2>&1; then python -m src.walkforward --summary; fi
+          if [ -d data/reports/walkforward/base ]; then python -m src.walkforward --summary --feature-set base; fi
       - uses: actions/upload-artifact@v4
         with:
           name: walkforward-summary
-          path: data/reports/walkforward/summary.json
+          path: |
+            data/reports/walkforward/summary.json
+            data/reports/walkforward/base/summary.json
+          if-no-files-found: warn

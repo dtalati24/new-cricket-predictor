@@ -135,6 +135,11 @@ Each year's results download as an artifact, and `walkforward-summary` holds the
 pooled numbers. The free private-repo quota is 2,000 minutes a month, so that is
 about one full run a month.
 
+To compare the first model's inputs against the new match-context inputs on the
+same matches, set `feature_sets` to `full,base`. Each year then runs twice (same
+training data and seeds); the `base` results land in a `base/` subfolder and get
+their own summary.
+
 ## Rebuilding the tables
 
 ```bash

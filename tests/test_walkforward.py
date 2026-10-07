@@ -124,3 +124,35 @@ def test_models_option_limits_what_is_fitted_and_scored(tmp_path, monkeypatch):
     assert set(rep["test"]) == {"good"}
     with pytest.raises(ValueError):
         wf.run_fold(2024, out_dir=tmp_path, models=("nope",))
+
+
+def test_base_feature_set_drops_context_and_competition_only():
+    from src.features.context import CONTEXT
+    from src.model.frame import FORM, SITUATION
+    from src.skill.shrink import LEVELS
+    from src.walkforward import feature_columns, feature_set_columns
+    full, base = feature_set_columns(LEVELS, "full"), feature_set_columns(LEVELS, "base")
+    assert full == feature_columns(LEVELS)
+    assert set(base) < set(full)
+    assert not set(base) & set(CONTEXT)
+    assert not any(c.startswith("competition__") for c in base)
+    assert len(full) - len(base) == len(CONTEXT) + 11
+    assert set(FORM + SITUATION) <= set(base)
+    assert any(c.startswith("hint__") for c in base) and any(c.startswith("batter__") for c in base)
+    with pytest.raises(ValueError):
+        feature_set_columns(LEVELS, "nope")
+
+
+def test_base_fold_writes_to_base_folder_and_fits_base_columns(tmp_path, monkeypatch):
+    wf, calls = _patch_fold(monkeypatch)
+    fit_cols = []
+    monkeypatch.setattr(wf, "feature_columns", lambda levels: ["a", "context_x", "competition__dot"])
+    monkeypatch.setattr(wf, "CONTEXT", ["context_x"])
+    monkeypatch.setattr(wf, "CLASSES", ["dot"])
+    monkeypatch.setattr(wf, "fit_model", lambda name, X, y, dates, cols: fit_cols.append(list(cols)) or name)
+    rep = wf.run_fold(2024, n_val=20, n_test=30, out_dir=tmp_path, feature_set="base")
+    assert (tmp_path / "base" / "2024.json").exists() and not (tmp_path / "2024.json").exists()
+    assert rep["feature_set"] == "base" and rep["n_features"] == 1
+    assert fit_cols and all(c == ["a"] for c in fit_cols)
+    wf.run_fold(2024, n_val=20, n_test=30, out_dir=tmp_path, models=("good",), smoke=True, feature_set="base")
+    assert (tmp_path / "base" / "smoke" / "2024.json").exists()
