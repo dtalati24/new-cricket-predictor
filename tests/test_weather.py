@@ -323,3 +323,19 @@ def test_one_failing_window_does_not_stop_the_others(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="1 of 5"):
         W.download_weather(venues, _far_apart_matches(5), get=get, pause=0, workers=3)
     assert len(list((tmp_path / "cache").glob("*.parquet"))) == 4
+    assert not list((tmp_path / "cache").glob("*.tmp"))
+
+
+def test_download_stops_early_after_ten_failures(tmp_path, monkeypatch):
+    monkeypatch.setattr(W, "CACHE", tmp_path / "cache")
+    monkeypatch.setattr(W, "HOURLY", tmp_path / "hourly.parquet")
+    calls = []
+
+    def get(url, params, timeout):
+        calls.append(1)
+        raise ValueError("down")
+
+    venues = pd.DataFrame({"latitude": [1.0], "longitude": [2.0]}, index=pd.Index(["V"], name="venue_key"))
+    with pytest.raises(RuntimeError, match="stopped early.*V 2024-"):
+        W.download_weather(venues, _far_apart_matches(60), get=get, pause=0, workers=2)
+    assert W.MAX_FAILURES <= len(calls) < 60

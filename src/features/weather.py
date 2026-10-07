@@ -6,7 +6,7 @@
 
 Weather values are historical observations, standing in for the forecast a
 bettor has at the toss. Requests stay inside Open-Meteo's free tier: <= 14 days
-and <= 10 variables each (one call apiece), at most one per second.
+and <= 10 variables each (one call apiece), up to MAX_WORKERS in flight (see MAX_WORKERS).
 """
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ import os
 import re
 import sys
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
@@ -40,6 +41,7 @@ PAUSE_S = 1.0
 # Free tier: 600/minute, 5,000/hour, 10,000/day. Each request takes ~6 s server-side, so
 # 4 in flight is ~2,400/hour, under the 5,000/hour limit.
 MAX_WORKERS = 4
+MAX_FAILURES = 10        # stop early when the failures look persistent
 WEAK_CODES = {"GB", "JM"}     # Betfair defaults: GB is its jurisdiction, JM the Caribbean
 MAX_RETRIES = 5
 BACKOFF_S = 60.0
@@ -227,22 +229,32 @@ def download_weather(venues: pd.DataFrame, matches: pd.DataFrame, get=requests.g
 
     def run(job):
         vk, lat, lon, start, end, path = job
-        h = fetch_window(lat, lon, start, end, get).assign(venue_key=vk)
-        tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-        h.to_parquet(tmp)
-        os.replace(tmp, path)
-        time.sleep(pause)
+        try:
+            h = fetch_window(lat, lon, start, end, get).assign(venue_key=vk)
+            tmp = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+            h.to_parquet(tmp)
+            os.replace(tmp, path)
+        except Exception as e:
+            msg = f"{vk} {start}..{end}: {e!r}"
+            print("weather window failed:", msg, flush=True)
+            raise RuntimeError(msg) from e
+        finally:
+            time.sleep(pause)
 
     errors, t0 = [], time.time()
     with ThreadPoolExecutor(max_workers=workers) as pool:
         for i, f in enumerate(as_completed([pool.submit(run, j) for j in jobs]), 1):
             if f.exception() is not None:
                 errors.append(f.exception())
+                if len(errors) >= MAX_FAILURES:
+                    pool.shutdown(wait=False, cancel_futures=True)
+                    break
             if i % 100 == 0:
                 print(f"{i}/{len(jobs)} windows, {(time.time() - t0) / 60:.1f} min", flush=True)
     if errors:
-        raise RuntimeError(f"{len(errors)} of {len(jobs)} weather windows failed "
-                           f"(rerun resumes from the cache); first: {errors[0]!r}")
+        raise RuntimeError(f"{len(errors)} of {len(jobs)} weather windows failed"
+                           f"{' (stopped early)' if len(errors) >= MAX_FAILURES else ''}; "
+                           f"rerun resumes from the cache; first: {errors[0]}")
     parts = [pd.read_parquet(p) for p in used]
     hourly = (pd.concat(parts, ignore_index=True).drop_duplicates(["venue_key", "time"])
               if parts else pd.DataFrame(columns=["venue_key", "time", "utc_offset_seconds", *VARS]))
