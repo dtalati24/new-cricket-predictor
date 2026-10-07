@@ -90,6 +90,7 @@ jobs:
           if ls data/reports/walkforward/*.json >/dev/null 2>&1; then python -m src.walkforward --summary; fi
           if [ -d data/reports/walkforward/base ]; then python -m src.walkforward --summary --feature-set base; fi
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: walkforward-summary
           path: |
