@@ -87,8 +87,10 @@ checked into git because it is small and hand-made. Venues still without
 coordinates get NaN weather. Report the share of training balls with weather.
 
 **Download.** One archive request per venue covering all its match dates
-(hourly), cached as `data/raw/weather/{venue_slug}.parquet`; about 375 requests,
-well inside the free tier. Re-runs reuse the cache.
+(hourly), cached as `data/raw/weather/{venue_slug}.parquet`; about 375 requests.
+Up to 4 requests in flight at once (user asked to speed it up, 2026-10-07): at
+~6 s each that is ~2,400/hour, still within the free tier (5,000/hour). Re-runs
+reuse the cache.
 
 ## 2. Faster runs
 

@@ -14,6 +14,7 @@ import os
 import re
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
 import pandas as pd
@@ -36,6 +37,9 @@ WEATHER = VARS + ["start_hour_local", "is_night"]
 NIGHT_HOUR = 17
 DAY_HOURS = (14, 20)
 PAUSE_S = 1.0
+# Free tier: 600/minute, 5,000/hour, 10,000/day. Each request takes ~6 s server-side, so
+# 4 in flight is ~2,400/hour, under the 5,000/hour limit.
+MAX_WORKERS = 4
 WEAK_CODES = {"GB", "JM"}     # Betfair defaults: GB is its jurisdiction, JM the Caribbean
 MAX_RETRIES = 5
 BACKOFF_S = 60.0
@@ -205,25 +209,40 @@ def _slug(s: str) -> str:
 
 
 def download_weather(venues: pd.DataFrame, matches: pd.DataFrame, get=requests.get,
-                     pause: float = PAUSE_S) -> pd.DataFrame:
+                     pause: float = PAUSE_S, workers: int = 1) -> pd.DataFrame:
     """`venues` indexed by venue_key with latitude/longitude; `matches` has venue_key, date.
 
     A cache file is named by venue, coordinates and window, so moving a venue refetches it.
+    Up to `workers` requests run at once; failed jobs are collected and raised together at the end.
     """
     CACHE.mkdir(parents=True, exist_ok=True)
     have = venues.dropna(subset=["latitude", "longitude"])
-    used = []
+    used, jobs = [], []
     for vk, v in have.iterrows():
         for start, end in date_windows(_padded(matches.loc[matches.venue_key == vk, "date"])):
             path = CACHE / f"{_slug(vk)}_{v.latitude:.3f}_{v.longitude:.3f}_{start}_{end}.parquet"
             used.append(path)
-            if path.exists():
-                continue
-            h = fetch_window(v.latitude, v.longitude, start, end, get).assign(venue_key=vk)
-            tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-            h.to_parquet(tmp)
-            os.replace(tmp, path)
-            time.sleep(pause)
+            if not path.exists():
+                jobs.append((vk, v.latitude, v.longitude, start, end, path))
+
+    def run(job):
+        vk, lat, lon, start, end, path = job
+        h = fetch_window(lat, lon, start, end, get).assign(venue_key=vk)
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+        h.to_parquet(tmp)
+        os.replace(tmp, path)
+        time.sleep(pause)
+
+    errors, t0 = [], time.time()
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for i, f in enumerate(as_completed([pool.submit(run, j) for j in jobs]), 1):
+            if f.exception() is not None:
+                errors.append(f.exception())
+            if i % 100 == 0:
+                print(f"{i}/{len(jobs)} windows, {(time.time() - t0) / 60:.1f} min", flush=True)
+    if errors:
+        raise RuntimeError(f"{len(errors)} of {len(jobs)} weather windows failed "
+                           f"(rerun resumes from the cache); first: {errors[0]!r}")
     parts = [pd.read_parquet(p) for p in used]
     hourly = (pd.concat(parts, ignore_index=True).drop_duplicates(["venue_key", "time"])
               if parts else pd.DataFrame(columns=["venue_key", "time", "utc_offset_seconds", *VARS]))
@@ -327,5 +346,5 @@ if __name__ == "__main__":
     if "--download" not in sys.argv:
         raise SystemExit(f"review {VENUES_CSV}, then rerun with --download")
     mv = matches.assign(venue_key=venue_key(matches.venue, matches.city))[["venue_key", "date"]]
-    hourly = download_weather(venues, mv)
+    hourly = download_weather(venues, mv, workers=MAX_WORKERS)
     print(f"hourly rows: {len(hourly):,}")

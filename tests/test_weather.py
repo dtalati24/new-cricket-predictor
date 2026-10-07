@@ -281,3 +281,45 @@ def test_download_skips_cached_windows(tmp_path, monkeypatch):
     venues.loc["V", "latitude"] = 1.5                                  # corrected coordinates refetch
     out = W.download_weather(venues, matches, get=get, pause=0)
     assert calls == ["2024-05-01"] * 2 and len(out) == 24, "old-coordinate rows are not mixed in"
+
+
+def _ok(params, n=24):
+    return FakeResponse({"utc_offset_seconds": 0, "hourly": {
+        "time": [f"{params['start_date']}T{h:02d}:00" for h in range(n)],
+        **{v: [1.0] * n for v in W.VARS}}})
+
+
+def _far_apart_matches(n):
+    return pd.DataFrame({"venue_key": "V", "date": pd.to_datetime(
+        [pd.Timestamp("2024-01-10") + pd.Timedelta(days=30 * i) for i in range(n)])})
+
+
+def test_parallel_download_fetches_every_window_once(tmp_path, monkeypatch):
+    monkeypatch.setattr(W, "CACHE", tmp_path / "cache")
+    monkeypatch.setattr(W, "HOURLY", tmp_path / "hourly.parquet")
+    calls = []
+
+    def get(url, params, timeout):
+        calls.append(params["start_date"])
+        return _ok(params)
+
+    venues = pd.DataFrame({"latitude": [1.0], "longitude": [2.0]}, index=pd.Index(["V"], name="venue_key"))
+    out = W.download_weather(venues, _far_apart_matches(6), get=get, pause=0, workers=3)
+    assert len(calls) == 6 and len(set(calls)) == 6
+    assert len(out) == 6 * 24 and out.time.is_unique
+
+
+def test_one_failing_window_does_not_stop_the_others(tmp_path, monkeypatch):
+    monkeypatch.setattr(W, "CACHE", tmp_path / "cache")
+    monkeypatch.setattr(W, "HOURLY", tmp_path / "hourly.parquet")
+    bad = "2024-02-08"      # padded start of the second match (2024-02-09)
+
+    def get(url, params, timeout):
+        if params["start_date"] == bad:
+            raise ValueError("boom")
+        return _ok(params)
+
+    venues = pd.DataFrame({"latitude": [1.0], "longitude": [2.0]}, index=pd.Index(["V"], name="venue_key"))
+    with pytest.raises(RuntimeError, match="1 of 5"):
+        W.download_weather(venues, _far_apart_matches(5), get=get, pause=0, workers=3)
+    assert len(list((tmp_path / "cache").glob("*.parquet"))) == 4
