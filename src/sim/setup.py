@@ -119,8 +119,18 @@ def simulate_setups(setups, model, table, cols, n_sims: int, legal_balls: int = 
     return out
 
 
+def build_setups(rows: pd.DataFrame, ctx: Context) -> list[MatchSetup]:
+    """Model-independent and slow (~1.7 s a match), so callers build once and reuse across models."""
+    out = []
+    for i, row in enumerate(rows.itertuples()):
+        out.append(match_setup(row, ctx))
+        if (i + 1) % 100 == 0:
+            print(f"  built {i + 1}/{len(rows)} match setups", flush=True)
+    return out
+
+
 def simulate_matches(rows: pd.DataFrame, ctx: Context, model, table: pd.DataFrame,
                      n_sims: int, legal_balls: int = 36, workers: int = 1) -> list[np.ndarray]:
-    setups = [match_setup(row, ctx) for row in rows.itertuples()]
+    setups = build_setups(rows, ctx)
     return simulate_setups(setups, model, run_table(table), feature_columns(ctx.skill.levels),
                            n_sims, legal_balls, workers)

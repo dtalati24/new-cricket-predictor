@@ -32,6 +32,17 @@ def test_summarize_pools_chosen_models_and_splits_clean_years(tmp_path):
     assert p["n_bets"] == 60 and p["roi"] == pytest.approx((0.95 * 30 - 30) / 60)
     assert p["roi_se"] > 0
     assert (tmp_path / "summary.json").exists()
+    assert s["missing_years"] == [2026]
+
+
+def test_summarize_reports_a_year_whose_chosen_parquet_is_missing(tmp_path, capsys):
+    _write_year(tmp_path, 2023, "logistic", seed=1)
+    _write_year(tmp_path, 2024, "lightgbm", seed=2)
+    (tmp_path / "2024_lightgbm_matches.parquet").unlink()
+    s = summarize(out_dir=tmp_path, years=(2023, 2024))
+    assert s["missing_years"] == [2024]
+    assert "2024" in capsys.readouterr().out
+    assert json.loads((tmp_path / "summary.json").read_text())["missing_years"] == [2024]
 
 
 @pytest.mark.skipif(not (MARKET / "overline_comparison.parquet").exists(), reason="market tables not built")
@@ -42,38 +53,51 @@ def test_year_rows_match_the_known_2024_count():
     assert (r.date.dt.year == 2024).all()
 
 
-def test_failed_comparison_model_is_recorded_and_chosen_model_is_kept(tmp_path, monkeypatch):
+def _patch_fold(monkeypatch, fail_bad=False):
+    """Offline run_fold: two fake models, counts of setup builds and the setups each simulation got."""
     from types import SimpleNamespace
 
     import src.walkforward as wf
 
     rng = np.random.default_rng(0)
+    calls = {"build": [], "sim": []}
 
     def rows(year, n=30):
         return pd.DataFrame({"match_id": [f"{year}-{i}" for i in range(n)],
                              "date": pd.date_range(f"{year}-01-01", periods=n),
                              "pre_match_line": 50.5, "runs_at_6ov": rng.normal(50, 10, n)})
 
-    n_val, n_test = 20, 30
     monkeypatch.setattr(wf, "year_rows", rows)
     monkeypatch.setattr(wf, "check_xi", lambda r, xi: None)
     monkeypatch.setattr(wf.pd, "read_parquet", lambda *a, **k: None)
     monkeypatch.setattr(wf, "MODELS", ("good", "bad"))
     monkeypatch.setattr(wf, "feature_columns", lambda levels: ["a"])
     monkeypatch.setattr(wf, "choose_model", lambda results: "good")
+    monkeypatch.setattr(wf, "run_table", lambda table: "rt")
     monkeypatch.setattr(wf, "prepare_cached", lambda cutoff: (
         SimpleNamespace(skill=SimpleNamespace(levels=[])),
         pd.DataFrame({"a": np.arange(10.0), "y": 0, "date": pd.date_range("2000-01-01", periods=10)}),
         None))
     monkeypatch.setattr(wf, "fit_model", lambda name, X, y, dates, cols: name)
 
-    def fake_sim(r, ctx, model, table, n, workers=1):
-        if model == "bad" and n == n_test:
-            raise RuntimeError("boom")
-        return [rng.normal(50, 10, 200) for _ in r.runs_at_6ov]
+    def fake_build(r, ctx):
+        calls["build"].append(len(r))
+        return [object() for _ in range(len(r))]
 
-    monkeypatch.setattr(wf, "simulate_matches", fake_sim)
-    rep = wf.run_fold(2024, n_val=n_val, n_test=n_test, out_dir=tmp_path)
+    def fake_sim(setups, model, table, cols, n, workers=1):
+        calls["sim"].append((model, n, setups))
+        if fail_bad and model == "bad" and n == 30:
+            raise RuntimeError("boom")
+        return [rng.normal(50, 10, 200) for _ in setups]
+
+    monkeypatch.setattr(wf, "build_setups", fake_build)
+    monkeypatch.setattr(wf, "simulate_setups", fake_sim)
+    return wf, calls
+
+
+def test_failed_comparison_model_is_recorded_and_chosen_model_is_kept(tmp_path, monkeypatch):
+    wf, _ = _patch_fold(monkeypatch, fail_bad=True)
+    rep = wf.run_fold(2024, n_val=20, n_test=30, out_dir=tmp_path)
     assert rep["chosen"] == "good"
     assert (tmp_path / "2024_good_matches.parquet").exists()
     assert not (tmp_path / "2024_bad_matches.parquet").exists()
@@ -81,3 +105,22 @@ def test_failed_comparison_model_is_recorded_and_chosen_model_is_kept(tmp_path, 
     assert saved["test"]["good"]["role"] == "chosen"
     assert "boom" in saved["test"]["bad"]["error"]
     assert saved["test"]["bad"]["role"] == "comparison"
+
+
+def test_setups_are_built_once_per_phase_not_once_per_model(tmp_path, monkeypatch):
+    wf, calls = _patch_fold(monkeypatch)
+    wf.run_fold(2024, n_val=20, n_test=30, out_dir=tmp_path)
+    assert calls["build"] == [30, 30]  # validation year once, test year once
+    val = [s for m, n, s in calls["sim"] if n == 20]
+    test = [s for m, n, s in calls["sim"] if n == 30]
+    assert len(val) == 2 and len(test) == 2
+    assert val[0] is val[1] and test[0] is test[1]
+
+
+def test_models_option_limits_what_is_fitted_and_scored(tmp_path, monkeypatch):
+    wf, calls = _patch_fold(monkeypatch)
+    rep = wf.run_fold(2024, n_val=20, n_test=30, out_dir=tmp_path, models=("good",))
+    assert {m for m, _, _ in calls["sim"]} == {"good"}
+    assert set(rep["test"]) == {"good"}
+    with pytest.raises(ValueError):
+        wf.run_fold(2024, out_dir=tmp_path, models=("nope",))

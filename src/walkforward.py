@@ -1,7 +1,7 @@
 # src/walkforward.py
 """Walk-forward test: for each test year Y, choose and calibrate on Y-1, score Y.
 
-    python -m src.walkforward --year 2024 [--workers 4] [--n-sims-val 2000] [--n-sims-test 10000] [--smoke]
+    python -m src.walkforward --year 2024 [--workers 4] [--n-sims-val 2000] [--n-sims-test 10000] [--models logistic,lightgbm,xgboost] [--smoke]
     python -m src.walkforward --summary
 
 One year per call, so each year can be its own GitHub Actions job. 2025-2026
@@ -26,7 +26,8 @@ from src.model.ballmodel import MODELS, fit as fit_model
 from src.model.frame import feature_columns
 from src.run_6over import SIX, choose_model, per_match, prepare
 from src.sim.calibrate import apply, fit_calibration, summary
-from src.sim.setup import check_xi, simulate_matches
+from src.sim.simulate import run_table
+from src.sim.setup import build_setups, check_xi, simulate_setups
 from src.skill.shrink import LEVELS
 
 YEARS = (2023, 2024, 2025, 2026)
@@ -60,16 +61,20 @@ def _fit_all(frame, cutoff, models, cols, smoke):
     return {n: fit_model(n, train, train.y.to_numpy(), train.date, cols) for n in models}
 
 
-def _score(name, report, cal, rows, cols, test_cut, n_test, workers, smoke, out_dir):
-    """Fit one model on < Y, simulate Y, write its parquet and the report. One model in memory at a time."""
+def _score(name, report, cal, rows, cols, test_cut, n_test, workers, smoke, out_dir, shared):
+    """Fit one model on < Y, simulate Y, write its parquet and the report. One model in memory at a time.
+
+    `shared` holds the test-year setups and run table: built from the first load, reused by every model."""
     year = report["year"]
     ctx, frame, table = prepare_cached(test_cut)
+    if "setups" not in shared:
+        shared["setups"], shared["table"] = build_setups(rows, ctx), run_table(table)
     model = _fit_all(frame, test_cut, [name], cols, smoke)[name]
     del frame
     gc.collect()
     ys = rows.runs_at_6ov.to_numpy(float)
     lines = rows.pre_match_line.to_numpy(float)
-    raw = simulate_matches(rows, ctx, model, table, n_test, workers=workers)
+    raw = simulate_setups(shared["setups"], model, shared["table"], cols, n_test, workers=workers)
     sims = [apply(cal, s) for s in raw]
     per_match(rows, raw, sims).to_parquet(out_dir / f"{year}_{name}_matches.parquet")
     report["test"][name] = {"role": "chosen" if name == report["chosen"] else "comparison",
@@ -80,10 +85,12 @@ def _score(name, report, cal, rows, cols, test_cut, n_test, workers, smoke, out_
 
 
 def run_fold(year: int, workers: int = 4, n_val: int = 2000, n_test: int = 10000,
-             smoke: bool = False, out_dir=OUT) -> dict:
+             smoke: bool = False, out_dir=OUT, models=None) -> dict:
     out_dir = out_dir / "smoke" if smoke else out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
-    models = ("logistic",) if smoke else MODELS
+    models = tuple(models) if models else (("logistic",) if smoke else tuple(MODELS))
+    if bad := [m for m in models if m not in MODELS]:
+        raise ValueError(f"unknown models {bad}; choose from {list(MODELS)}")
     val_cut, test_cut = f"{year - 1}-01-01", f"{year}-01-01"
     val_rows, test_rows = year_rows(year - 1), year_rows(year)
     if smoke:
@@ -93,13 +100,14 @@ def run_fold(year: int, workers: int = 4, n_val: int = 2000, n_test: int = 10000
     # Phase 1: fit on < Y-1, simulate Y-1, calibrate each model, choose one.
     ctx, frame, table = prepare_cached(val_cut)
     cols = feature_columns(ctx.skill.levels)
+    val_setups, val_table = build_setups(val_rows, ctx), run_table(table)
     fitted = _fit_all(frame, val_cut, models, cols, smoke)
     del frame
     gc.collect()
     ys = val_rows.runs_at_6ov.to_numpy(float)
     val, cals = {}, {}
     for n, m in fitted.items():
-        sims = simulate_matches(val_rows, ctx, m, table, n_val, workers=workers)
+        sims = simulate_setups(val_setups, m, val_table, cols, n_val, workers=workers)
         val[n] = {"raw": summary(sims, ys)}
         try:
             cals[n] = fit_calibration(sims, ys)
@@ -111,7 +119,7 @@ def run_fold(year: int, workers: int = 4, n_val: int = 2000, n_test: int = 10000
     if not cals:
         raise SystemExit(f"{year}: no model could be calibrated on {year - 1}")
     chosen = choose_model(val)
-    del ctx, fitted
+    del ctx, fitted, val_setups
     gc.collect()
     report = {"year": year, "chosen": chosen, "smoke": smoke, "n_val_sims": n_val,
               "n_test_sims": n_test, "n_val_matches": len(val_rows),
@@ -122,7 +130,7 @@ def run_fold(year: int, workers: int = 4, n_val: int = 2000, n_test: int = 10000
     # model first; comparisons are best-effort, each in a fresh load so memory stays flat.
     lines, ys = test_rows.pre_match_line.to_numpy(float), test_rows.runs_at_6ov.to_numpy(float)
     report["market_mae"] = float(np.mean(np.abs(lines - ys)))
-    args = (test_rows, cols, test_cut, n_test, workers, smoke, out_dir)
+    args = (test_rows, cols, test_cut, n_test, workers, smoke, out_dir, {})
     _score(chosen, report, cals[chosen], *args)
     for n in [k for k in cals if k != chosen]:
         try:
@@ -149,21 +157,22 @@ def _stats(df: pd.DataFrame) -> dict:
 
 
 def summarize(out_dir=OUT, years=YEARS) -> dict:
-    frames = {}
+    frames, missing = {}, []
     for y in years:
         meta = out_dir / f"{y}.json"
-        if not meta.exists():
-            continue
-        chosen = json.loads(meta.read_text())["chosen"]
-        path = out_dir / f"{y}_{chosen}_matches.parquet"
-        if path.exists():
+        path = out_dir / f"{y}_{json.loads(meta.read_text())['chosen']}_matches.parquet" if meta.exists() else None
+        if path is not None and path.exists():
             frames[y] = pd.read_parquet(path)
+        else:
+            missing.append(y)
+            print(f"MISSING: no result for {y}", flush=True)
     if not frames:
         raise SystemExit(f"no fold results in {out_dir}")
     clean = [frames[y] for y in frames if y in (2023, 2024)]
     out = {"per_year": {str(y): _stats(f) for y, f in frames.items()},
            "pooled": _stats(pd.concat(frames.values(), ignore_index=True)),
-           "pooled_2023_2024": _stats(pd.concat(clean, ignore_index=True)) if clean else None}
+           "pooled_2023_2024": _stats(pd.concat(clean, ignore_index=True)) if clean else None,
+           "missing_years": missing}
     (out_dir / "summary.json").write_text(json.dumps(out, indent=2, default=float))
     return out
 
@@ -179,8 +188,9 @@ if __name__ == "__main__":
     elif "--year" in argv:
         rep = run_fold(_arg(argv, "--year", None), workers=_arg(argv, "--workers", 4),
                        n_val=_arg(argv, "--n-sims-val", 2000),
-                       n_test=_arg(argv, "--n-sims-test", 10000), smoke="--smoke" in argv)
+                       n_test=_arg(argv, "--n-sims-test", 10000), smoke="--smoke" in argv,
+                       models=_arg(argv, "--models", None, lambda v: v.split(",")))
         print(json.dumps({k: rep[k] for k in ("year", "chosen", "market_mae")}, default=float))
     else:
         raise SystemExit("usage: python -m src.walkforward --year Y [--workers N] "
-                         "[--n-sims-val N] [--n-sims-test N] [--smoke] | --summary")
+                         "[--n-sims-val N] [--n-sims-test N] [--models a,b] [--smoke] | --summary")

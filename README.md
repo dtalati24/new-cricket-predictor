@@ -59,9 +59,15 @@ It needs the processed tables, which are licensed and so never go into git.
 1. `python -m src.pack_data` packs them into `data_bundle.tar.gz` (about 80 MB).
 2. Upload it once as a release on this private repo:
    `gh release create data-v1 data_bundle.tar.gz --notes "Processed tables (licensed; private)"`
-3. On GitHub, open Actions, pick "walk-forward", press Run workflow.
+3. On GitHub, open Actions, pick "walk-forward", press Run workflow. The
+   workflow only appears there after this branch is merged to `main`.
 
-Each test year is its own job, about 4 to 5 hours on GitHub's 2-core runners.
+Each test year is its own job on GitHub's 2-core runners. How long it takes
+depends on which model wins that year (logistic is fastest, LightGBM slowest).
+Do a first run with one year (`years: 2024`) to measure it, then choose
+`n_sims_test` and `models` so each year fits the 6-hour job limit. Setting
+`n_sims_test` to 5000 halves the simulation time and raises the per-match noise
+from about 0.13 to about 0.19 runs.
 Each year's results download as an artifact, and `walkforward-summary` holds the
 pooled numbers. The free private-repo quota is 2,000 minutes a month, so that is
 about one full run a month.

@@ -11,6 +11,10 @@ on:
         description: "Simulations per test match"
         default: "10000"
         required: true
+      models:
+        description: "Models to fit and score, comma-separated"
+        default: "logistic,lightgbm,xgboost"
+        required: true
       data_tag:
         description: "Release tag holding data_bundle.tar.gz"
         default: "data-v1"
@@ -50,7 +54,8 @@ jobs:
           gh release download "${{ inputs.data_tag }}" --pattern data_bundle.tar.gz
           tar -xzf data_bundle.tar.gz
       - name: Run fold
-        run: python -u -m src.walkforward --year ${{ matrix.year }} --workers 2 --n-sims-test ${{ inputs.n_sims_test }}
+        timeout-minutes: 340
+        run: python -u -m src.walkforward --year ${{ matrix.year }} --workers 2 --n-sims-test ${{ inputs.n_sims_test }} --models ${{ inputs.models }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
