@@ -1,7 +1,8 @@
 """Per-ball 11-class models: multinomial logistic (the floor), LightGBM, XGBoost.
 
 The boosted models early-stop on the most recent 10% of their own training
-rows, so no evaluation year is touched while fitting.
+rows, so no evaluation year is touched while fitting. An optional recency
+halflife (years) down-weights older training balls.
 """
 from __future__ import annotations
 
@@ -33,10 +34,21 @@ def _recent_split(dates: pd.Series):
     return order[:cut], order[cut:]
 
 
+def recency_weights(dates: pd.Series, halflife: float | None) -> np.ndarray | None:
+    """Weight 1 for the latest training ball, halving every `halflife` years before it."""
+    if halflife is None:
+        return None
+    d = pd.to_datetime(pd.Series(dates)).to_numpy()
+    age = (d.max() - d) / np.timedelta64(1, "D") / 365.25
+    return 0.5 ** (age / halflife)
+
+
 def fit(name: str, X: pd.DataFrame, y: np.ndarray, dates: pd.Series,
-        cols: list[str]) -> BallModel:
+        cols: list[str], halflife: float | None = None) -> BallModel:
     X = X[cols].reset_index(drop=True)
     y = np.asarray(y)
+    w = recency_weights(dates, halflife)
+    sub = lambda idx: None if w is None else w[idx] / w[idx].mean()   # mean 1: regularisation keeps its scale
     if name == "logistic":
         from sklearn.impute import SimpleImputer
         from sklearn.linear_model import LogisticRegression
@@ -44,14 +56,15 @@ def fit(name: str, X: pd.DataFrame, y: np.ndarray, dates: pd.Series,
         from sklearn.preprocessing import StandardScaler
         est = make_pipeline(SimpleImputer(strategy="median"), StandardScaler(),
                             LogisticRegression(max_iter=500))
-        est.fit(X, y)
+        est.fit(X, y, logisticregression__sample_weight=sub(slice(None)))
     elif name == "lightgbm":
         import lightgbm as lgb
         a, b = _recent_split(dates)
         est = lgb.LGBMClassifier(objective="multiclass", n_estimators=3000, learning_rate=0.05,
                                  num_leaves=63, min_child_samples=500, subsample=0.8,
                                  subsample_freq=1, colsample_bytree=0.8, verbose=-1)
-        est.fit(X.iloc[a], y[a], eval_X=X.iloc[b], eval_y=y[b],
+        est.fit(X.iloc[a], y[a], sample_weight=sub(a),
+                eval_X=X.iloc[b], eval_y=y[b],
                 callbacks=[lgb.early_stopping(50, verbose=False)])
     elif name == "xgboost":
         import xgboost as xgb
@@ -60,7 +73,8 @@ def fit(name: str, X: pd.DataFrame, y: np.ndarray, dates: pd.Series,
                                 learning_rate=0.05, max_depth=6, subsample=0.8,
                                 colsample_bytree=0.8, tree_method="hist",
                                 early_stopping_rounds=50, eval_metric="mlogloss")
-        est.fit(X.iloc[a], y[a], eval_set=[(X.iloc[b], y[b])], verbose=False)
+        est.fit(X.iloc[a], y[a], sample_weight=sub(a),
+                eval_set=[(X.iloc[b], y[b])], verbose=False)
     else:
         raise ValueError(f"unknown model {name!r}; expected one of {MODELS}")
     if len(est.classes_) != N_CLASSES:
