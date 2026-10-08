@@ -9,11 +9,14 @@ toss and before the first ball.
    (0, 1, 2, 3, 4, 6, 5+, wicket, wide, no-ball, bye). Outcome rates are shrunk
    toward a parent: batter, bowler, venue and competition toward the league;
    batter vs bowler type, bowler vs batting hand, batter at venue and bowler at
-   venue toward the player's own rate (leave-own-out). Shrinkage strength is
-   fitted by marginal likelihood, one value per level.
+   venue toward the player's own rate (leave-own-out); batter and bowler in
+   each phase (powerplay, middle, death) toward the player's own rate rescaled
+   by the league's phase effect. Shrinkage strength is fitted by marginal
+   likelihood, one value per level.
 2. **Per-ball model.** Multinomial logistic regression, LightGBM or XGBoost
    predicts the 11 outcome probabilities from the skill estimates, a batter ×
-   bowler hint, recent form, the match situation, and match context:
+   bowler hint, recent form (all overs and powerplay only), the match
+   situation, and match context:
    - toss (did the side batting first choose to),
    - season, and league-wide powerplay scoring over the last 90 days,
    - recent powerplay scoring at the venue and in the competition,
@@ -167,9 +170,38 @@ to 2025–2026 gives MAE 10.39–10.44 vs the market's 10.48, and squared error
 174–175 vs 180. Not significant on MAE alone (±0.09), but it points the same
 way as the correlation and the betting results.
 
-Next step chosen: weight recent matches more heavily when training, to attack
-the running-low problem at its source (powerplay scoring has risen, and the
-model learns mostly from older matches).
+## Tried and rejected: weighting recent matches (2026-10-08)
+
+Idea: count recent training matches more (weight halving every 1, 2, 4 or 8
+years) to fix the model running low as powerplay scoring rises. Checked with
+`python -m src.quick_eval` (no simulation: fit on balls before year Y, score
+Y's powerplay balls on log loss and expected runs per innings vs the realised
+outcomes). Results in `data/reports/quick_eval_recency.json`.
+
+- **LightGBM:** unweighted has the best log loss in both 2024 and 2025. In
+  2024 weighting makes running low worse (−1.50 runs per innings unweighted,
+  −1.98 with a 1-year halflife); in 2025 it moves the bias toward zero but
+  predicts the balls worse.
+- **Logistic:** a 4–8 year halflife improves log loss very slightly (1.6473 →
+  1.6466 in 2025) and running low by 0.1–0.6 runs, but logistic stays far
+  behind LightGBM (1.6326) and still runs about 4.4 runs low.
+
+So recency weighting stays off (the `halflife` option remains, default none).
+
+## Powerplay records (2026-10-08)
+
+Every skill level used to pool all 20 overs. Added (spec:
+`docs/superpowers/specs/2026-10-08-powerplay-records-design.md`):
+
+- **Two shrinkage levels, batter × phase and bowler × phase** (phase = overs
+  1–6, 7–15, 16–20). Each player's phase record is shrunk toward their overall
+  record rescaled by the league's phase effect (league rates in that phase /
+  league rates overall), so a player with no history gets the league powerplay
+  average. The simulator always uses the powerplay version.
+- **Powerplay form:** recent powerplay strike rate and dismissal rate (batter),
+  economy and wicket rate (bowler), next to the all-overs form.
+
+The `base` feature set (the first model's inputs) leaves these out too.
 
 ## Checking the predicted spread (PIT)
 
