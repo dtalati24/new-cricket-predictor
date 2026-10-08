@@ -3,7 +3,8 @@
 
 Separate from the skill counts on purpose: counts are plain integers for the
 shrinkage; recency lives here. Each table holds the state AFTER each date and
-is read point-in-time with `as_of`.
+is read point-in-time with `as_of`. Each table also carries the same rates over
+powerplay balls only (overs 1-6), carried forward through matches without any.
 """
 from __future__ import annotations
 
@@ -26,7 +27,23 @@ def post_match_ewm(per: pd.DataFrame, key: str, cols: list[str],
     return per
 
 
+def _with_powerplay(all_overs: pd.DataFrame, pp: pd.DataFrame) -> pd.DataFrame:
+    cols = [c for c in pp.columns if c not in ("player_id", "date")]
+    out = all_overs.merge(pp, on=["player_id", "date"], how="outer")
+    out = out.sort_values(["player_id", "date"], kind="stable").reset_index(drop=True)
+    out[cols] = out.groupby("player_id")[cols].ffill()
+    return out
+
+
 def batter_form(balls: pd.DataFrame) -> pd.DataFrame:
+    return _with_powerplay(_batter_rates(balls, "bat_form"), _batter_rates(balls[balls.over < 6], "bat_pp"))
+
+
+def bowler_form(balls: pd.DataFrame) -> pd.DataFrame:
+    return _with_powerplay(_bowler_rates(balls, "bowl_form"), _bowler_rates(balls[balls.over < 6], "bowl_pp"))
+
+
+def _batter_rates(balls: pd.DataFrame, prefix: str) -> pd.DataFrame:
     faced = balls[balls.outcome != "wide"]
     per = (faced.groupby(["batter_id", "date"])
            .agg(runs=("runs_batter", "sum"), balls=("runs_batter", "size"))
@@ -35,12 +52,12 @@ def batter_form(balls: pd.DataFrame) -> pd.DataFrame:
             .rename("outs").reset_index().rename(columns={"player_dismissed_id": "player_id"}))
     per = per.merge(outs, on=["player_id", "date"], how="left").fillna({"outs": 0})
     per = post_match_ewm(per, "player_id", ["runs", "balls", "outs"])
-    per["bat_form_sr"] = per.runs / per.balls
-    per["bat_form_out"] = per.outs / per.balls
-    return per[["player_id", "date", "bat_form_sr", "bat_form_out"]]
+    per[f"{prefix}_sr"] = per.runs / per.balls
+    per[f"{prefix}_out"] = per.outs / per.balls
+    return per[["player_id", "date", f"{prefix}_sr", f"{prefix}_out"]]
 
 
-def bowler_form(balls: pd.DataFrame) -> pd.DataFrame:
+def _bowler_rates(balls: pd.DataFrame, prefix: str) -> pd.DataFrame:
     b = balls.assign(
         conceded=balls.runs_total - balls.bye.fillna(0) - balls.legbye.fillna(0)
         - balls.penalty.fillna(0),
@@ -52,6 +69,6 @@ def bowler_form(balls: pd.DataFrame) -> pd.DataFrame:
            .reset_index().rename(columns={"bowler_id": "player_id"}))
     per = post_match_ewm(per, "player_id", ["conceded", "legal", "wkts"])
     legal = per.legal.where(per.legal > 0)
-    per["bowl_form_econ"] = per.conceded / legal
-    per["bowl_form_wkt"] = per.wkts / legal
-    return per[["player_id", "date", "bowl_form_econ", "bowl_form_wkt"]]
+    per[f"{prefix}_econ"] = per.conceded / legal
+    per[f"{prefix}_wkt"] = per.wkts / legal
+    return per[["player_id", "date", f"{prefix}_econ", f"{prefix}_wkt"]]

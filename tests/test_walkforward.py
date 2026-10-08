@@ -126,9 +126,9 @@ def test_models_option_limits_what_is_fitted_and_scored(tmp_path, monkeypatch):
         wf.run_fold(2024, out_dir=tmp_path, models=("nope",))
 
 
-def test_base_feature_set_drops_context_and_competition_only():
+def test_base_feature_set_is_the_first_models_inputs():
     from src.features.context import CONTEXT
-    from src.model.frame import FORM, SITUATION
+    from src.model.frame import FORM, PP_FORM, SITUATION
     from src.skill.shrink import LEVELS
     from src.walkforward import feature_columns, feature_set_columns
     full, base = feature_set_columns(LEVELS, "full"), feature_set_columns(LEVELS, "base")
@@ -136,8 +136,10 @@ def test_base_feature_set_drops_context_and_competition_only():
     assert set(base) < set(full)
     assert not set(base) & set(CONTEXT)
     assert not any(c.startswith("competition__") for c in base)
-    assert len(full) - len(base) == len(CONTEXT) + 11
-    assert set(FORM + SITUATION) <= set(base)
+    assert not set(base) & set(PP_FORM)
+    assert not any(c.startswith(("batter_x_phase__", "bowler_x_phase__")) for c in base)
+    assert len(full) - len(base) == len(CONTEXT) + len(PP_FORM) + 3 * 11
+    assert (set(FORM) - set(PP_FORM)) | set(SITUATION) <= set(base)
     assert any(c.startswith("hint__") for c in base) and any(c.startswith("batter__") for c in base)
     with pytest.raises(ValueError):
         feature_set_columns(LEVELS, "nope")

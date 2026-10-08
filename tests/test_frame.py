@@ -116,10 +116,12 @@ def test_build_frame_on_two_matches():
                        levels)
     bat_form = pd.DataFrame({"player_id": ["b", "b"],
                              "date": pd.to_datetime(["2020-02-01", "2020-03-01"]),
-                             "bat_form_sr": [100.0, 999.0], "bat_form_out": [0.1, 0.9]})
+                             "bat_form_sr": [100.0, 999.0], "bat_form_out": [0.1, 0.9],
+                             "bat_pp_sr": [1.0, 2.0], "bat_pp_out": [0.1, 0.2]})
     bowl_form = pd.DataFrame({"player_id": ["w", "w"],
                               "date": pd.to_datetime(["2020-02-01", "2020-03-01"]),
-                              "bowl_form_econ": [7.0, 99.0], "bowl_form_wkt": [0.2, 0.9]})
+                              "bowl_form_econ": [7.0, 99.0], "bowl_form_wkt": [0.2, 0.9],
+                              "bowl_pp_econ": [8.0, 9.0], "bowl_pp_wkt": [0.3, 0.4]})
     context = pd.DataFrame(0.0, index=["m1", "m2"], columns=CONTEXT)
     f = build_frame(balls, skill, bat_form, bowl_form, context)
     assert len(f) == 8 and f.match_id.tolist() == ["m1"] * 4 + ["m2"] * 4, "innings 1 only"
@@ -130,4 +132,5 @@ def test_build_frame_on_two_matches():
     # m1 is dated 2020-03-01: the 2020-03-01 form row is same-day, so only the 2020-02-01 row shows
     assert (m1.bat_form_sr == 100.0).all() and (m1.bowl_form_econ == 7.0).all()
     assert (m2.bat_form_sr == 999.0).all() and (m2.bowl_form_wkt == np.float32(0.9)).all()
+    assert (m2.bat_pp_sr == 2.0).all() and (m1.bowl_pp_econ == 8.0).all()
     assert m2.runs.tolist() == [0, 1, 2, 6]

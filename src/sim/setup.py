@@ -54,6 +54,7 @@ def match_setup(row, ctx: Context) -> MatchSetup:
     pairs["batting_hand"] = pairs.batter_id.map(s.batting_hand).fillna("unknown")
     pairs["venue_key"] = row.venue_key
     pairs["competition_key"] = row.competition_key
+    pairs["phase"] = "pp"                       # the simulator only plays the powerplay
     pairs["date"] = pd.Timestamp(row.date)
     crow = ctx.context.loc[row.match_id, CONTEXT].to_numpy(np.float32)
     cblock = pd.DataFrame(np.tile(crow, (len(pairs), 1)), index=pairs.index, columns=CONTEXT)

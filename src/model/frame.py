@@ -15,7 +15,8 @@ from src.features.outcomes import CLASSES, NOT_LEGAL, is_wicket
 from src.skill.shrink import Level, SkillModel, estimates
 
 SITUATION = ["over", "ball_in_over", "wickets", "runs", "batter_balls", "free_hit"]
-FORM = ["bat_form_sr", "bat_form_out", "bowl_form_econ", "bowl_form_wkt"]
+PP_FORM = ["bat_pp_sr", "bat_pp_out", "bowl_pp_econ", "bowl_pp_wkt"]
+FORM = ["bat_form_sr", "bat_form_out", "bowl_form_econ", "bowl_form_wkt"] + PP_FORM
 
 
 def skill_columns(levels: tuple[Level, ...]) -> list[str]:
@@ -46,8 +47,8 @@ def form_features(query: pd.DataFrame, bat_form: pd.DataFrame,
                   bowl_form: pd.DataFrame) -> pd.DataFrame:
     qb = query[["batter_id", "date"]].rename(columns={"batter_id": "player_id"})
     qw = query[["bowler_id", "date"]].rename(columns={"bowler_id": "player_id"})
-    a = as_of(bat_form, qb, ["player_id"], ["bat_form_sr", "bat_form_out"])
-    b = as_of(bowl_form, qw, ["player_id"], ["bowl_form_econ", "bowl_form_wkt"])
+    a = as_of(bat_form, qb, ["player_id"], [c for c in FORM if c.startswith("bat_")])
+    b = as_of(bowl_form, qw, ["player_id"], [c for c in FORM if c.startswith("bowl_")])
     return pd.concat([a, b], axis=1).astype(np.float32)
 
 

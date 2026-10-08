@@ -87,6 +87,11 @@ def mens_t20_matches() -> pd.DataFrame:
     return m[m.match_type.isin(["T20", "IT20"]) & (m.gender == "male") & (m.balls_per_over == 6)]
 
 
+def phase(over: pd.Series) -> np.ndarray:
+    """0-based Cricsheet over -> "pp" (overs 1-6), "middle" (7-15), "death" (16+)."""
+    return np.select([over < 6, over < 15], ["pp", "middle"], "death")
+
+
 def load_balls() -> pd.DataFrame:
     """Men's T20/IT20, 6-ball overs, innings 1-2, in delivery order, labelled."""
     m = mens_t20_matches()
@@ -101,5 +106,6 @@ def load_balls() -> pd.DataFrame:
     d["venue_key"] = venue_key(d["venue"], d["city"])
     d["competition_key"] = competition_key(d["event_name"])
     d["outcome"] = label_outcomes(d)
+    d["phase"] = phase(d["over"])
     d = d.sort_values(["date", "match_id", "innings_num", "over", "ball_seq"], kind="stable")
     return d.reset_index(drop=True)

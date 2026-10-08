@@ -86,13 +86,16 @@ def test_fit_runs_the_chain_and_orders_k_sensibly():
 def test_levels_are_the_spec_hierarchy():
     by = {lv.name: lv for lv in LEVELS}
     assert set(by) == {"batter", "bowler", "venue", "competition", "batter_x_bowlertype", "bowler_x_battinghand",
-                       "batter_x_venue", "bowler_x_venue"}
+                       "batter_x_venue", "bowler_x_venue", "batter_x_phase", "bowler_x_phase"}
     assert by["venue"].parent is None
     assert by["venue"].group_cols == ("venue_key",)
     assert by["competition"].parent is None
     assert by["competition"].group_cols == ("competition_key",)
     assert by["batter_x_venue"].parent == "batter"
     assert by["bowler_x_venue"].parent == "bowler"
+    assert by["batter_x_phase"] == Level("batter_x_phase", ("batter_id", "phase"), "batter", by_phase=True)
+    assert by["bowler_x_phase"] == Level("bowler_x_phase", ("bowler_id", "phase"), "bowler", by_phase=True)
+    assert not any(lv.by_phase for lv in LEVELS if lv.name not in ("batter_x_phase", "bowler_x_phase"))
 
 
 def test_child_estimate_uses_the_leave_own_out_parent():
@@ -134,3 +137,63 @@ def test_grandchild_chains_are_rejected():
                           "outcome": pd.Categorical(["4"], categories=CLASSES)})
     with pytest.raises(ValueError):
         fit(balls, "2021-01-01", levels)
+
+
+def test_phase_level_shrinks_toward_the_phase_adjusted_overall_record():
+    kb, kp = 5.0, 8.0
+    league = np.full(11, 1 / 11)
+    pp = np.linspace(1, 2, 11)
+    pp = pp / pp.sum()                      # league powerplay rates
+    balls = pd.DataFrame({                  # b1: 4 sixes, all outside the powerplay
+        "batter_id": ["b1"] * 4, "phase": ["middle"] * 4,
+        "date": pd.to_datetime(["2020-01-01"] * 4),
+        "outcome": pd.Categorical(["6"] * 4, categories=CLASSES)})
+    levels = (Level("batter", ("batter_id",), None),
+              Level("batter_x_phase", ("batter_id", "phase"), "batter", by_phase=True))
+    skill = SkillModel(league=league, k={"batter": kb, "batter_x_phase": kp},
+                       cum={lv.name: cumulative_counts(balls, list(lv.group_cols)) for lv in levels},
+                       levels=levels, phase_league={"pp": pp, "middle": league, "death": league})
+    q = pd.DataFrame({"batter_id": ["b1", "new"], "phase": ["pp", "pp"],
+                      "date": pd.to_datetime(["2020-02-01"] * 2)})
+    e = estimates(skill, q)["batter_x_phase"]
+    i6 = CLASSES.index("6")
+    overall = (np.eye(11)[i6] * 4 + kb * league) / (4 + kb)     # no pp balls, so nothing left out
+    exp = overall * pp / league
+    np.testing.assert_allclose(e[0], exp / exp.sum())
+    np.testing.assert_allclose(e[1], pp, err_msg="no history at all: the league powerplay average")
+
+
+def test_unknown_phase_raises():
+    levels = (Level("batter", ("batter_id",), None),
+              Level("batter_x_phase", ("batter_id", "phase"), "batter", by_phase=True))
+    balls = pd.DataFrame({"batter_id": ["b1"], "phase": ["pp"], "date": pd.to_datetime(["2020-01-01"]),
+                          "outcome": pd.Categorical(["4"], categories=CLASSES)})
+    skill = SkillModel(np.full(11, 1 / 11), {"batter": 5.0, "batter_x_phase": 5.0},
+                       {lv.name: cumulative_counts(balls, list(lv.group_cols)) for lv in levels},
+                       levels, phase_league={"pp": np.full(11, 1 / 11)})
+    q = pd.DataFrame({"batter_id": ["b1"], "phase": ["death"], "date": pd.to_datetime(["2020-02-01"])})
+    with pytest.raises(ValueError):
+        estimates(skill, q)
+
+
+def test_fit_learns_phase_levels():
+    """Batters differ by phase around a phase-shifted overall rate; k is fitted, not at a bound."""
+    rng = np.random.default_rng(1)
+    league = rng.dirichlet(np.full(11, 20.0))
+    shift = {"pp": np.linspace(0.7, 1.3, 11), "middle": np.ones(11)}
+    rows = []
+    for b in range(300):
+        p_b = rng.dirichlet(60 * league)
+        for ph, f in shift.items():
+            base = p_b * f / (p_b * f).sum()
+            draws = rng.choice(11, size=150, p=rng.dirichlet(150 * base))
+            rows.append(pd.DataFrame({"batter_id": f"b{b}", "phase": ph, "o": draws}))
+    d = pd.concat(rows, ignore_index=True)
+    d["date"] = pd.Timestamp("2020-01-01") + pd.to_timedelta(rng.integers(0, 300, len(d)), "D")
+    d["outcome"] = pd.Categorical(np.array(CLASSES)[d.o], categories=CLASSES)
+    levels = (Level("batter", ("batter_id",), None),
+              Level("batter_x_phase", ("batter_id", "phase"), "batter", by_phase=True))
+    skill = fit(d, cutoff="2021-01-01", levels=levels)
+    assert set(skill.phase_league) == {"pp", "middle"}
+    np.testing.assert_allclose(sum(skill.phase_league.values()) / 2, skill.league, atol=0.01)
+    assert 30 < skill.k["batter_x_phase"] < 1500

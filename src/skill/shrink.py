@@ -10,10 +10,15 @@ likelihood of the training-slice counts given the parent. Levels:
     league -> venue
     league -> competition
     batter x venue (parent batter), bowler x venue (parent bowler)
+    batter x phase (parent batter), bowler x phase (parent bowler)
+
+A phase level's parent is the player's all-overs estimate rescaled by the
+league's phase effect (league rates in that phase / league rates overall), so
+a player with no history lands on the league average for the phase.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
@@ -63,6 +68,7 @@ class Level:
     name: str
     group_cols: tuple[str, ...]
     parent: str | None          # None = league vector
+    by_phase: bool = False      # parent rescaled by the league's phase effect (needs a `phase` column)
 
 
 LEVELS = (
@@ -74,6 +80,8 @@ LEVELS = (
     Level("bowler_x_battinghand", ("bowler_id", "batting_hand"), "bowler"),
     Level("batter_x_venue", ("batter_id", "venue_key"), "batter"),
     Level("bowler_x_venue", ("bowler_id", "venue_key"), "bowler"),
+    Level("batter_x_phase", ("batter_id", "phase"), "batter", by_phase=True),
+    Level("bowler_x_phase", ("bowler_id", "phase"), "bowler", by_phase=True),
 )
 
 
@@ -83,6 +91,18 @@ class SkillModel:
     k: dict[str, float]                # fitted on the training slice
     cum: dict[str, pd.DataFrame]       # running counts over ALL balls; read strictly before
     levels: tuple[Level, ...]
+    phase_league: dict[str, np.ndarray] = field(default_factory=dict)  # phase -> (11,), training slice
+
+
+def phase_adjust(parent: np.ndarray, phases, phase_league: dict[str, np.ndarray],
+                 league: np.ndarray) -> np.ndarray:
+    """Rescale each parent row by its phase's league rates over the all-overs league rates."""
+    keys = list(phase_league)
+    idx = pd.Index(keys).get_indexer(np.asarray(phases))
+    if (idx < 0).any():
+        raise ValueError(f"phases {sorted(set(np.asarray(phases)[idx < 0]))} have no league rates")
+    ratio = np.stack([phase_league[k] for k in keys]) / league
+    return _clean(parent * ratio[idx])
 
 
 def _parent_of(lv: Level, by_name: dict[str, Level]) -> Level | None:
@@ -111,6 +131,11 @@ def fit(balls: pd.DataFrame, cutoff: str, levels: tuple[Level, ...] = LEVELS) ->
     train = balls[balls.date < cutoff]
     league = train.outcome.value_counts().reindex(CLASSES, fill_value=0).to_numpy(float)
     league = league / league.sum()
+    phase_league = {}
+    if any(lv.by_phase for lv in levels):
+        for ph, g in train.groupby("phase"):
+            c = g.outcome.value_counts().reindex(CLASSES, fill_value=0).to_numpy(float)
+            phase_league[ph] = c / c.sum()
     by_name = {lv.name: lv for lv in levels}
     for lv in levels:
         _parent_of(lv, by_name)  # reject unsupported chains before any fitting
@@ -129,10 +154,12 @@ def fit(balls: pd.DataFrame, cutoff: str, levels: tuple[Level, ...] = LEVELS) ->
             idx = tot[pcols].merge(pkeys.assign(_i=np.arange(len(pkeys))),
                                    on=pcols, how="left")["_i"].to_numpy()
             parent = leave_own_out_parent(pcounts[idx], counts, league, k[par.name])
+        if lv.by_phase:
+            parent = phase_adjust(parent, tot.phase, phase_league, league)
         k[lv.name] = fit_k(counts, parent)
         seen[lv.name] = (tot[cols].reset_index(drop=True), counts)
     cum = {lv.name: cumulative_counts(balls, list(lv.group_cols)) for lv in levels}
-    return SkillModel(league, k, cum, tuple(levels))
+    return SkillModel(league, k, cum, tuple(levels), phase_league)
 
 
 def estimates(skill: SkillModel, query: pd.DataFrame) -> dict[str, np.ndarray]:
@@ -148,6 +175,8 @@ def estimates(skill: SkillModel, query: pd.DataFrame) -> dict[str, np.ndarray]:
         else:
             pcounts = counts_before(skill.cum[par.name], query, list(par.group_cols))
             parent = leave_own_out_parent(pcounts, counts, skill.league, skill.k[par.name])
+        if lv.by_phase:
+            parent = phase_adjust(parent, query.phase, skill.phase_league, skill.league)
         out[lv.name] = shrink(counts, parent, skill.k[lv.name])
     return out
 

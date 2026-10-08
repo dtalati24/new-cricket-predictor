@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 from src.features.asof import as_of
-from src.features.form import HALFLIFE, batter_form, post_match_ewm
+from src.features.form import HALFLIFE, batter_form, bowler_form, post_match_ewm
 from src.features.outcomes import label_outcomes
 from src.features.players import (
     batting_hand, batting_positions, bowler_type, powerplay_history)
@@ -48,11 +48,30 @@ def test_batter_form_ignores_wides_as_balls_faced():
         "runs_batter": [4, 0, 2], "runs_total": [4, 1, 2],
         "wide": [np.nan, 1.0, np.nan], "noball": [np.nan] * 3,
         "bye": [np.nan] * 3, "legbye": [np.nan] * 3,
-        "wicket_kind": [None, None, "caught"], "player_dismissed_id": [None, None, "p"]})
+        "wicket_kind": [None, None, "caught"], "player_dismissed_id": [None, None, "p"],
+        "over": [0, 0, 0]})
     b["outcome"] = label_outcomes(b)
     f = batter_form(b).iloc[0]
     assert f.bat_form_sr == pytest.approx(6 / 2), "two balls faced, the wide is not one"
     assert f.bat_form_out == pytest.approx(1 / 2)
+
+
+def test_powerplay_form_counts_only_the_first_six_overs_and_carries_forward():
+    b = pd.DataFrame({
+        "batter_id": ["p"] * 3, "bowler_id": ["q"] * 3,
+        "date": D(["2020-01-01", "2020-01-01", "2020-02-01"]),
+        "over": [0, 10, 12], "runs_batter": [4, 6, 1], "runs_total": [4, 6, 1],
+        "wide": [np.nan] * 3, "noball": [np.nan] * 3, "bye": [np.nan] * 3,
+        "legbye": [np.nan] * 3, "penalty": [np.nan] * 3,
+        "wicket_kind": [None] * 3, "player_dismissed_id": [None] * 3})
+    b["outcome"] = label_outcomes(b)
+    bat, bowl = batter_form(b), bowler_form(b)
+    assert bat.bat_pp_sr.tolist() == pytest.approx([4.0, 4.0]), "the 6 in over 11 is not powerplay"
+    assert bat.bat_pp_out.tolist() == pytest.approx([0.0, 0.0])
+    assert bat.bat_form_sr.iloc[0] == pytest.approx(5.0)
+    assert bowl.bowl_pp_econ.tolist() == pytest.approx([4.0, 4.0])
+    assert bowl.bowl_pp_wkt.tolist() == pytest.approx([0.0, 0.0])
+    assert len(bat) == 2 and len(bowl) == 2
 
 
 @pytest.mark.parametrize("style,expected", [
@@ -73,6 +92,24 @@ def test_batter_form_ignores_wides_as_balls_faced():
 ])
 def test_bowler_type(style, expected):
     assert bowler_type(style) == expected
+
+
+def test_powerplay_form_counts_only_the_first_six_overs_and_carries_forward():
+    b = pd.DataFrame({
+        "batter_id": ["p"] * 3, "bowler_id": ["q"] * 3,
+        "date": D(["2020-01-01", "2020-01-01", "2020-02-01"]),
+        "over": [0, 10, 12], "runs_batter": [4, 6, 1], "runs_total": [4, 6, 1],
+        "wide": [np.nan] * 3, "noball": [np.nan] * 3, "bye": [np.nan] * 3,
+        "legbye": [np.nan] * 3, "penalty": [np.nan] * 3,
+        "wicket_kind": [None] * 3, "player_dismissed_id": [None] * 3})
+    b["outcome"] = label_outcomes(b)
+    bat, bowl = batter_form(b), bowler_form(b)
+    assert bat.bat_pp_sr.tolist() == pytest.approx([4.0, 4.0]), "the 6 in over 11 is not powerplay"
+    assert bat.bat_pp_out.tolist() == pytest.approx([0.0, 0.0])
+    assert bat.bat_form_sr.iloc[0] == pytest.approx(5.0)
+    assert bowl.bowl_pp_econ.tolist() == pytest.approx([4.0, 4.0])
+    assert bowl.bowl_pp_wkt.tolist() == pytest.approx([0.0, 0.0])
+    assert len(bat) == 2 and len(bowl) == 2
 
 
 @pytest.mark.parametrize("style,expected", [

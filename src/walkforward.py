@@ -24,7 +24,7 @@ from src.features.context import CONTEXT
 from src.features.outcomes import CLASSES, competition_key, venue_key
 from src.market.baseline import comparison_set
 from src.model.ballmodel import MODELS, fit as fit_model
-from src.model.frame import feature_columns
+from src.model.frame import PP_FORM, feature_columns
 from src.run_6over import SIX, choose_model, per_match, prepare
 from src.sim.calibrate import apply, fit_calibration, summary
 from src.sim.simulate import run_table
@@ -56,13 +56,14 @@ def prepare_cached(cutoff: str):
 
 
 def feature_set_columns(levels, name: str) -> list[str]:
-    """"full" = every model input; "base" = the first model's inputs (no context, no competition level)."""
+    """"full" = every model input; "base" = the first model's inputs (no context, competition, phase levels or powerplay form)."""
     if name not in FEATURE_SETS:
         raise ValueError(f"unknown feature set {name!r}; choose from {list(FEATURE_SETS)}")
     cols = feature_columns(levels)
     if name == "full":
         return cols
-    drop = set(CONTEXT) | {f"competition__{c}" for c in CLASSES}
+    drop = set(CONTEXT) | set(PP_FORM) | {f"{lv}__{c}" for lv in ("competition", "batter_x_phase", "bowler_x_phase")
+                                          for c in CLASSES}
     return [c for c in cols if c not in drop]
 
 
