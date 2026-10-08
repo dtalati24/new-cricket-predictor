@@ -203,6 +203,23 @@ Every skill level used to pool all 20 overs. Added (spec:
 
 The `base` feature set (the first model's inputs) leaves these out too.
 
+**Result (quick check, `data/reports/quick_eval_powerplay.json`),** before →
+after on next-year powerplay balls:
+
+| model | year | log loss | runs low per innings |
+|---|---|---|---|
+| LightGBM | 2024 | 1.61410 → 1.61411 | −1.50 → −1.53 |
+| LightGBM | 2025 | 1.63255 → 1.63251 | −0.59 → −0.26 |
+| logistic | 2024 | 1.62726 → 1.62030 | −3.70 → −1.29 |
+| logistic | 2025 | 1.64717 → 1.64134 | −4.43 → −1.81 |
+
+Logistic gains a lot: as a linear model it cannot combine "over number" with a
+player's overall record by itself, so the powerplay-specific records give it
+something new, and most of its running low goes away. LightGBM was already
+learning that combination from the existing inputs, so it does not change. The
+best per-ball model (LightGBM) is therefore no better, and logistic is still
+behind it. The levels stay in.
+
 ## Checking the predicted spread (PIT)
 
 The simulator outputs a spread of possible 6-over scores, not one number. PIT
