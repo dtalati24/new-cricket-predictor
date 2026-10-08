@@ -89,13 +89,56 @@ modestly, and the new 2024 number is the honest out-of-sample one. 2024 also
 looks like a good year for this approach in general: the first model managed
 only +0.3% ROI on 2025+, where the market was harder to beat (MAE 10.48).
 
-**Caveats.** One year only; 2023, 2025 and 2026 decide whether this holds.
+**Caveats.** One year only; 2025 and 2026 are below, 2023 is not run yet.
 Weather uses observed values at the start hour, while a bettor at the toss has
 a forecast, which flatters the model slightly. The 2025–2026 results were seen
 before the context features were designed, so 2023–2024 are the cleaner test.
 
 Details: `data/reports/walkforward_gh/walkforward-2024/2024.json` and the
 per-match parquet files beside it.
+
+## Results: old inputs vs new inputs, 2025–2026 (2026-10-08)
+
+A 1:1 test of whether the match-context features help. Each year was run twice
+on GitHub with the same training data, cutoffs and simulation seeds: `full`
+(126 inputs, with match context) and `base` (98 inputs: the first model's
+skill, form and situation inputs, without context or the competition level).
+Scored on the same 764 matches (442 in 2025, 322 in 2026). Market MAE 10.48.
+Differences below are new minus old, paired match by match, ± one standard error.
+
+| model | miss before calibration | miss after calibration | profit per match | ROI new | ROI old |
+|---|---|---|---|---|---|
+| logistic | −0.15 ± 0.06 | +0.02 ± 0.06 | +0.00 ± 0.02 | −0.4% | −0.5% |
+| LightGBM | −0.25 ± 0.08 | +0.04 ± 0.09 | +0.03 ± 0.03 | +4.0% | +0.9% |
+| XGBoost | −0.26 ± 0.08 | +0.05 ± 0.08 | +0.05 ± 0.03 | +7.2% | +1.3% |
+
+ROI is over about 690 bets per arm, ± 3.7%. Both arms chose the same model each
+year: logistic for 2025 (new −0.3%, old +1.1%) and LightGBM for 2026 (new
++3.7%, old −0.8%).
+
+What it shows:
+
+- **The new inputs make the raw simulator better.** It misses by 0.25 runs less
+  for the boosted models, three standard errors, and the result repeats in both
+  years. It also mostly fixes the simulator running low (boosted raw bias about
+  −0.4 runs, against −2.3 with the old inputs in 2025).
+- **Calibration erases the gain on accuracy.** Each calibration is learned on
+  the previous year, when the model ran low, so it shifts the new version up
+  too far. After calibration the two arms are tied, and neither beats the market
+  on average miss (10.58–10.65 vs 10.48).
+- **Betting leans toward the new inputs**, mainly for XGBoost (+0.05 per match
+  staked, about 1.8 standard errors). Not proven, and picking the best of three
+  models after the fact flatters it.
+
+Removing the calibration shift (keeping the median as simulated) was checked
+on 2024 and 2025 from the saved results: it helps the boosted models in 2025
+(10.42 vs 10.50), hurts slightly in 2024 (10.16 vs 10.10), and logistic needs it
+(raw bias about −4.7 runs). A simple "bet the side the uncalibrated median
+points to" rule did no better than the current rule. So the calibration stays
+as it is. An exact test of a spread-only calibration would need the raw
+simulated scores, which the runs don't save.
+
+Details: `data/reports/walkforward_gh_ab/walkforward-{year}-{full,base}/`.
 
 ## Checking the predicted spread (PIT)
 
