@@ -138,7 +138,38 @@ points to" rule did no better than the current rule. So the calibration stays
 as it is. An exact test of a spread-only calibration would need the raw
 simulated scores, which the runs don't save.
 
+Squared error tells the same story (2025–2026, 764 matches; 180 ≈ a 13.4-run
+typical miss): market 180; LightGBM and XGBoost new 179 calibrated / 178 raw,
+old 178 / 187; logistic new 182 / 203, old 182 / 209. The model-vs-market
+difference has a standard error of about ±7, so all of these tie the market.
+
 Details: `data/reports/walkforward_gh_ab/walkforward-{year}-{full,base}/`.
+
+## The model knows something the market doesn't (2026-10-08)
+
+Tying the market on average miss does not mean no edge: the model and the
+market miss on different matches. When the model disagrees with the line, the
+real score tends to move the model's way. The correlation between
+(model − line) and (actual − line) is 0.18 in 2024, and 0.17–0.19 on the
+unseen 2025–2026 matches (new-input models, calibrated median). On 764
+matches that is about 5 standard errors from zero.
+
+0.18 sounds small, but most of a 6-over score is luck (about 13 runs of
+match-to-match noise), so even a perfect forecaster would have a low
+correlation with the market's errors. For example, if the line were off from
+the true expected score by 4 runs on a typical match, a perfect forecaster
+would reach only about 0.3. A correlation of 0.18 is what produces the ~55%
+hit rate the backtest shows.
+
+Practical use: mixing the model with the line beats the line alone. A weight on
+the model fitted on 2024 (0.52–0.62 depending on model) and applied unchanged
+to 2025–2026 gives MAE 10.39–10.44 vs the market's 10.48, and squared error
+174–175 vs 180. Not significant on MAE alone (±0.09), but it points the same
+way as the correlation and the betting results.
+
+Next step chosen: weight recent matches more heavily when training, to attack
+the running-low problem at its source (powerplay scoring has risen, and the
+model learns mostly from older matches).
 
 ## Checking the predicted spread (PIT)
 
