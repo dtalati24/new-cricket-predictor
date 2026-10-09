@@ -220,6 +220,31 @@ learning that combination from the existing inputs, so it does not change. The
 best per-ball model (LightGBM) is therefore no better, and logistic is still
 behind it. The levels stay in.
 
+**Walk-forward with powerplay records (GitHub run 37932214164, 2026-10-09).**
+2024–2026, all three models, 10,000 sims, same matches and calibration
+procedure as before (152 inputs, up from 126). New minus previous, pooled over
+1,199 matches (market MAE 10.40):
+
+| model | miss before calibration | miss after calibration | ROI before → after |
+|---|---|---|---|
+| logistic | 10.95 → 10.48 (−0.47 ± 0.09) | 10.43 → 10.43 | +3.7% → +3.8% |
+| LightGBM | 10.40 → 10.44 (+0.04 ± 0.03) | 10.41 → 10.47 | +5.4% → +7.2% |
+| XGBoost | 10.42 → 10.40 (−0.02 ± 0.03) | 10.43 → 10.40 | +7.9% → +5.2% |
+
+ROI is ± 2.9% over about 1,100 bets. The model chosen in advance each year
+(logistic, logistic, then XGBoost for 2026) made **+4.8% ± 2.9% over 1,109
+bets**, exactly the same as before, with MAE 10.43 vs the market's 10.40. The
+correlation between (model − line) and (actual − line) stays at 0.18.
+
+So the powerplay records fix logistic's raw running low (−4.2 → −1.1 runs), but
+calibration was already correcting that, and nothing changes after
+calibration. The LightGBM and XGBoost ROI moves go in opposite directions and
+are within noise. Conclusion: more player statistics no longer improve the
+model; the next gains have to come from elsewhere.
+
+Details: `data/reports/walkforward_gh_pp/`. GitHub minutes: the 2025 job took
+4.5 hours, the others about 2.4.
+
 ## Checking the predicted spread (PIT)
 
 The simulator outputs a spread of possible 6-over scores, not one number. PIT
