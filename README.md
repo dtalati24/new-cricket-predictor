@@ -293,6 +293,8 @@ recording the model's price and the best back/lay price and size available at
 the toss; only then stake real money, in small fixed amounts, with the model
 and rules fixed in advance.
 
+Costs, API mechanics, line-market rules and live data sources: `docs/betfair-logistics.md`. Note: in the API, BACK = UNDER and LAY = OVER on line markets.
+
 ## Checking the predicted spread (PIT)
 
 The simulator outputs a spread of possible 6-over scores, not one number. PIT
