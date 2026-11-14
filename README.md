@@ -280,8 +280,12 @@ often the 6-over line changed in the 30 minutes before the first ball
 All the backtest profit is in quiet markets (T20 Blast, Bangladesh PL, Super
 Smash, Major League Cricket), where the bet price is a last trade that may not
 have been on offer. In busy markets (IPL, World Cup) the line beats the model.
-Next: the untouched 2023 fold as a clean test (run 43607293748), then record
-real order books with the free delayed key before spending on the live key.
+Clean test on the untouched 2023 fold (run 43607293748): the split holds in
+direction but is smaller. Quiet +7% to +11% ± 7%, busy −19% (boosted models);
+weight on the model in quiet markets 0.33, not ~1. Next: record real order
+books with the free delayed key before spending on the live key. Busy-market
+tests (section 9 of the review) found no pre-match edge and one weak in-play
+lead (the 20-over line under-reacts to the powerplay).
 
 ## Before betting real money
 

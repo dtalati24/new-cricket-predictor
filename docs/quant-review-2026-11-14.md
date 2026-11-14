@@ -195,7 +195,34 @@ Written before the result:
 
 Score it with `python -m src.quiet_markets <results folder> lightgbm`.
 
-**Result:** pending.
+**Result (scored 2026-11-14, `data/reports/walkforward_gh_2023/`): partly
+confirmed, and smaller than 2024–2026 suggested.**
+
+| model | quiet ROI (bets) | busy ROI (bets) | quiet weight | busy weight |
+|---|---|---|---|---|
+| LightGBM | +7.1% ± 6.7% (213) | −18.9% ± 6.8% (202) | 0.33 ± 0.17 | −0.23 ± 0.24 |
+| XGBoost | +10.7% ± 6.6% (215) | −19.1% ± 6.7% (205) | 0.33 ± 0.17 | −0.28 ± 0.24 |
+| logistic | +9.2% ± 6.6% (216) | −7.6% ± 7.1% (190) | 0.37 ± 0.17 | 0.27 ± 0.27 |
+
+- **Prediction 1 held:** quiet ROI is above zero for all three models and far
+  above busy ROI (a gap of 26–30 points for the boosted models, about 3
+  standard errors). But quiet ROI by itself is only 1.1–1.6 standard errors
+  above zero in 2023.
+- **Prediction 2 half failed:** the busy weight is below 0.3 as predicted, but
+  the quiet weight is 0.33, not above 0.5. By the rule written above, that is
+  a fail.
+- **Reading:** the quiet/busy split is real in direction (four years out of
+  four, quiet beats busy). Its size was overstated by 2024–2026: the quiet
+  line in 2023 held real information (MAE 9.15 against the model's 9.4) and
+  the quiet edge was about a third to a half as big. Pooled over 2023–2026,
+  LightGBM quiet ROI is about +17% ± 4% and busy about −6% ± 3%; treat the
+  true quiet figure as nearer +7–10% at the last traded price, before any
+  cost of getting a worse line.
+- 2023 overall: the model lost to the market (MAE 9.64–10.0 against 9.47) and
+  made +1% (logistic, chosen) to −6% (LightGBM). The boosted models ran 1.7–1.9
+  runs low; the calibration came from only 165 matches of 2022.
+- Section 4's question (can the quiet price actually be had) is now more
+  important, not less: at +7–10%, a line 1–2 runs worse removes the edge.
 
 ## 8. Plan
 
