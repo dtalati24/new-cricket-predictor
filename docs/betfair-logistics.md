@@ -99,6 +99,33 @@ toss decision, the venue, the start time and a weather forecast.
 - **Weather forecast:** Open-Meteo forecast API, free for non-commercial use
   (10,000 calls/day), hourly at any latitude/longitude, credit required.
 
+## Updating every ball (in-play) — researched 2026-11-14
+
+Betfair prices are not the blocker: the same API key streams the line market
+live while play is on. The blockers are:
+
+- **Speed of the ball-by-ball feed.** TV and most score feeds run several
+  seconds behind the ground (industry figures: 5–8 s for streams). Traders with
+  faster data will match against any price we leave up after a boundary or
+  wicket. Betfair's in-play bet delay (read `betDelay`; reported as 1–12 s)
+  also applies to our orders.
+- **No way to backtest yet.** Our Basic Betfair data has in-play prices only
+  about once a minute, and Cricsheet has no ball times, so a price can't be
+  matched to the ball it followed. PRO data (£150/month) has the full order
+  book but still no ball times. In-play would need its own recorded data:
+  ball times from a live feed plus the Betfair stream, collected for weeks.
+- **The model side is easy.** The simulator can restart from the current
+  score, wickets, balls bowled and batters at the crease.
+
+Costs: the £499 live key; a fast live feed (Sportmonks €29/month is cheap
+but its update speed is UNCONFIRMED; faster professional feeds cost far more);
+PRO data optional. Do in-play only after the pre-match edge holds up in paper
+trading.
+
+**XIs from X/Twitter:** X's API is pay-per-use in 2026 (about $0.005 per post
+read, no free tier), and team-sheet tweets need parsing into Cricsheet IDs.
+Typing two XIs takes about two minutes; not worth automating yet.
+
 ## Suggested order
 
 1. Build the live pricing script (XIs, toss, venue, forecast in; mixed-model
