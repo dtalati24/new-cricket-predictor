@@ -254,3 +254,69 @@ Model changes worth making along the way (all cheap):
 Not worth more time: more player statistics, recency weighting, rolling
 calibration, disagreement thresholds, and trying to beat the IPL closing line
 before the match with a stats model.
+
+## 9. Looking for an edge in busy markets (tests run 2026-11-14)
+
+All tests use prices and results only (2022–2026, 1,819 matches) unless they
+say "model" (2024–2026, LightGBM and XGBoost averaged). Where possible the
+signal was found on 2022–2024 and checked on 2025–2026. This work was cut
+short by a usage limit; the scripts are not in the repo yet.
+
+**Tested and found nothing in busy markets (the line already has it):**
+
+- Team form against the line (last 5 results minus line, batting and bowling
+  side), venue form, tournament drift, line level.
+- Line movement before the match (last 60, 36, 15, 5 minutes).
+- Match odds (is the batting side the favourite), toss decision.
+- The same event's 20-over line.
+- In-play 6-over line: after 4, 8, 12, 16, 20 minutes the line has reacted
+  fully to what has happened (no momentum, no over-reaction).
+- The minutes after the toss: trades made 0–6 minutes after the toss are
+  already efficient against the model (weight 0.2–0.3, ROI about 0). The big
+  "edge" against older prints is stale or junk prints, not bettable.
+- Chase powerplay line at the innings break: it has fully absorbed the first
+  innings (total and powerplay); nothing left.
+- Blind overs: 51.6% over 1,044 busy matches, about +0.7% ROI. Nothing.
+
+**One lead: the 20-over line under-reacts to the powerplay.** Timed exactly
+from the moment Betfair suspends the 6-over market:
+
+- Truth: each run the powerplay beats its closing line by adds about 1.22
+  runs to the final total. The 20-over line moves about 1.06.
+- So the first 20-over price after the powerplay is short by about 0.16 runs
+  per run of surprise (t = 3.5 on 1,423 matches; 0.12 in 2022–2024, 0.26 in
+  2025–2026; 0.16 in busy 20-over markets).
+- It fades: 0.14 three minutes later, 0.05 by 40 minutes, zero by 60.
+- As a bet (follow the powerplay when it beat or missed the line by 10+
+  runs, at the first print a minute after the powerplay): +7% ± 4% over 586
+  bets, positive every year, but nearly all from overs after good powerplays
+  (+13% ± 6%; unders −6%), and a line 1 run worse leaves +3%.
+- Verdict: real in the regression, thin as a bet. It is the one place the
+  data shows a busy market leaving something, and it needs no speed.
+
+**What the busy market knows that the model does not:**
+
+- **Team strength in internationals.** In busy internationals the model
+  under-predicts favourites badly: a 70/30 favourite scores about 3 runs more
+  than the model says (t = 4.9); the line has this right. In leagues (IPL and
+  others) there is no such effect. Cause: player records are pooled across
+  opposition of very different strength. A crude fix fitted on 2024 (add
+  match odds) did not help on 2025–2026, so it needs doing properly inside
+  the skill model, not as a patch.
+- **Not mainly the batting order or bowlers.** Both assumed openers are right
+  in 62% of matches; the model loses to busy lines by the same margin whether
+  they are right or wrong. Knowing the powerplay bowlers helps a little.
+- In quiet league markets the line over-rates the favourite (t = −1.9) and the
+  model is right: part of where the quiet-market edge comes from.
+
+**Conclusion for busy markets.** No public-data signal beats a busy closing
+line before the match; I tested about fifteen. The realistic routes are:
+
+1. In play, with the full-innings simulator started from the live score:
+   first target is the 20-over line right after the powerplay (test it
+   against the prints with the exact timing above before building anything
+   live).
+2. Fix the model's international weakness (opposition-strength adjustment),
+   which stops it losing there but will not by itself beat the line.
+3. Information the crowd lacks (pitch reading, earlier team news) or speed.
+   Neither is available from our data.
