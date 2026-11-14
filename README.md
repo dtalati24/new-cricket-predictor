@@ -245,6 +245,54 @@ model; the next gains have to come from elsewhere.
 Details: `data/reports/walkforward_gh_pp/`. GitHub minutes: the 2025 job took
 4.5 hours, the others about 2.4.
 
+## Mixing the model with the market line (2026-11-14)
+
+Mixed forecast = line + w × (model calibrated median − line), with w fitted by
+least squares on 2024 (powerplay-records run): logistic 0.68, LightGBM 0.56,
+XGBoost 0.56. Applied unchanged to 2025–2026 (764 matches; market MAE 10.48,
+squared error 180):
+
+| model | MAE alone → mixed | squared error mixed | ROI current rule → mixed |
+|---|---|---|---|
+| logistic | 10.64 → 10.46 | 176 | −0.5% → −1.5% |
+| LightGBM | 10.68 → 10.42 | 175 | +6.3% → +6.8% |
+| XGBoost | 10.57 → 10.37 | 173 | +4.5% → +5.5% |
+
+ROI is ± about 3.8%. The mix is more accurate than the market, but betting
+returns barely change: the mix always lies between the model and the line, so
+it always points to the same side as the model; it only skips about 50 of the
+closest calls. Mixed probabilities were computed by treating each match's
+calibrated spread as a normal distribution (sd from the p10–p90 range), so the
+mixed ROI is approximate (about ±1–2% vs an exact calculation). Its real value
+is for stake sizing: more honest probabilities.
+
+## Before betting real money
+
+Everything above is a backtest. Things to know first:
+
+1. **There is no live pricing tool yet.** To price an upcoming match the code
+   needs: both confirmed XIs at the toss mapped to Cricsheet player IDs, the
+   venue and competition keys, the toss decision, a weather forecast and the
+   start time; models refitted on all data to date; a calibration fitted on the
+   latest full year; and the mix weight. That script has to be built.
+2. **The edge is not proven.** The model chosen in advance made +4.8% ± 2.9%
+   over 2024–2026 (1.6 standard errors); the mix about +5–7% ± 3.8% on
+   2025–2026. A true edge of zero is still plausible.
+3. **Real prices may be worse than the backtest.** It assumes the last traded
+   line before the first ball was available at even money. Bilateral games are
+   thin (a trade every few minutes around the toss); the line or price you can
+   actually get may cost several percent, which is the whole edge.
+4. **Live weather is a forecast,** while the backtest used observed weather.
+5. **2025–2026 were seen** before the context features were designed, so
+   those years are slightly flattering.
+6. **Variance.** At a 55% hit rate, runs of 8–10 losses in a row will happen
+   over a few hundred bets.
+
+Recommended order: build the live pricing script; paper-trade 50–100 matches,
+recording the model's price and the best back/lay price and size available at
+the toss; only then stake real money, in small fixed amounts, with the model
+and rules fixed in advance.
+
 ## Checking the predicted spread (PIT)
 
 The simulator outputs a spread of possible 6-over scores, not one number. PIT
