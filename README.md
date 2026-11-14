@@ -266,6 +266,23 @@ calibrated spread as a normal distribution (sd from the p10–p90 range), so the
 mixed ROI is approximate (about ±1–2% vs an exact calculation). Its real value
 is for stake sizing: more honest probabilities.
 
+## Quant review: the edge is only in quiet markets (2026-11-14)
+
+Full write-up: `docs/quant-review-2026-11-14.md`. Splitting 2024–2026 by how
+often the 6-over line changed in the 30 minutes before the first ball
+(`python -m src.quiet_markets data/reports/walkforward_gh_pp lightgbm`):
+
+| group | matches | LightGBM ROI | weight on model vs line |
+|---|---|---|---|
+| quiet (0–6 changes) | 474 | +21.4% ± 4.6% | 0.94 ± 0.11 |
+| busy (7+ changes) | 725 | −2.2% ± 3.8% | 0.04 ± 0.11 |
+
+All the backtest profit is in quiet markets (T20 Blast, Bangladesh PL, Super
+Smash, Major League Cricket), where the bet price is a last trade that may not
+have been on offer. In busy markets (IPL, World Cup) the line beats the model.
+Next: the untouched 2023 fold as a clean test (run 43607293748), then record
+real order books with the free delayed key before spending on the live key.
+
 ## Before betting real money
 
 Everything above is a backtest. Things to know first:
